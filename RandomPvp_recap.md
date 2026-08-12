@@ -47,6 +47,42 @@ l'affichage colle aux stats réelles du menu d'équipe pendant un combat random.
 
 ---
 
+## 0 bis. Interrupteur : le mod ne tourne qu'en random battle
+
+Le profil 85 EV n'est vrai QU'EN random battle. Appliqué à un combat classé ou
+sauvage, il produit des chiffres faux sans le signaler. Le mod est donc **inactif
+par défaut** et passe par une porte unique, `battle/RandomBattleGate` :
+
+- `RandomBattleGate.estActif()` est testé au tout début de chaque point d'entrée :
+  `CalcOverlay.onHudRender`, `SwitchOverlayRenderer.render`, `PvpOverlay.render`,
+  `PvpDetector` (scan d'écran) et `BattleMessageHandlerMixin`. Désarmé, le mod
+  n'affiche rien et n'accumule aucune observation.
+- Armement manuel par **F8** (rebindable, catégorie RandomPvp). Confirmation en
+  chat, et bandeau `RandomPvp : ACTIF (F8)` en haut à gauche hors combat.
+- L'état **n'est pas persisté** : chaque lancement du jeu repart désarmé. Un état
+  sauvegardé qui traîne est exactement le scénario où le mod s'activerait sur un
+  combat classé sans qu'on le remarque.
+- Le désarmement appelle `ObservationCollector.reinitialiser()` pour qu'aucune
+  observation d'un autre format ne survive.
+
+### Détection automatique : à faire
+
+L'armement manuel est une sécurité, pas la solution finale. Le signal client qui
+distingue une random battle d'un combat classé n'est pas encore identifié :
+`PvpDetector` reconnaît le classé par le titre d'écran `Sélection de l'équipe` et
+le challenge par `Select your Lead Pokemon`, mais la file random battle se rejoint
+en cliquant un hologramme, et on ne sait pas quel écran ou quel message
+l'accompagne.
+
+`battle/DetectionDebugLogger` (temporaire, actif même mod désarmé) écrit dans
+`config/randompvp-detection-debug.txt` : titre de chaque écran ouvert, chaque
+message de chat / barre d'action / combat, et les transitions début-fin de combat.
+Jouer une random battle **et** un combat classé, puis comparer les deux traces
+pour trouver le discriminant. Une fois trouvé, il remplacera l'armement manuel
+dans `RandomBattleGate` et ce logger sera retiré.
+
+---
+
 ## 1. Calcul de dégâts
 
 ### Capacités à puissance variable

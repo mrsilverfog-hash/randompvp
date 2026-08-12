@@ -20,11 +20,19 @@ public class BattleMessageHandlerMixin {
 
     @Inject(method = "handle", at = @At("HEAD"))
     private void randompvp$onBattleMessage(BattleMessagePacket packet, MinecraftClient client, CallbackInfo ci) {
-        com.tropimon.randompvp.RandomPvpClient.LOGGER.info("[RandomPvp-diag] Mixin handle() atteint, packet null ? {}", packet == null);
+        if (packet == null) return;
+
+        // Diagnostic de format : on journalise même mod désarmé
         try {
-            if (packet != null) {
-                com.tropimon.randompvp.RandomPvpClient.LOGGER.info("[RandomPvp-diag] Nombre de messages dans le paquet : {}", packet.getMessages().size());
+            for (Text message : packet.getMessages()) {
+                com.tropimon.randompvp.battle.DetectionDebugLogger.message("COMBAT", message.getString());
             }
+        } catch (Throwable ignored) {
+        }
+
+        if (!com.tropimon.randompvp.battle.RandomBattleGate.estActif()) return;
+
+        try {
             for (Text message : packet.getMessages()) {
                 MoveUseTracker.traiterMessage(message);
             }
