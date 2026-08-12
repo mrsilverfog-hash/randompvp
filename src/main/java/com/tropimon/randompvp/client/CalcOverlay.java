@@ -356,45 +356,29 @@ public final class CalcOverlay implements HudRenderCallback {
             y += hauteurLigne;
         }
 
-        // --- Section 3 : set estimé ---
-        if (smogon != null && !smogon.topSpreads().isEmpty()) {
+        // --- Section 3 : objet confirmé ---
+        // Plus aucun "set estimé" : en random battle les EV (85 partout) et la
+        // nature (neutre) sont connus, il n'y a rien à estimer. Afficher un
+        // spread Smogon ou une fourchette d'inférence d'EV ne serait pas
+        // seulement inutile, ce serait faux.
+        //
+        // L'objet, lui, varie toujours — et il n'est affiché que quand on le
+        // SAIT, jamais en supposition. Casque Brut / Restes : détectés par le
+        // motif de chip/soin. Écharpe Choix : il agit avant alors que sa vitesse
+        // max ne le permettrait pas. Bandeau/Lunettes Choix : ratio net x1.5.
+        // Orbe Vie : ratio net x1.3 + son propre recul de ~10% le même tour.
+        String objetConfirme = ObservationCollector.getObjetConfirme(especeAdv);
+        boolean objetRetire = ObservationCollector.estObjetConfirme(especeAdv) && objetConfirme == null;
+        if (objetConfirme != null) {
             y += 4;
-            SmogonDataLoader.ParsedSpread top = smogon.topSpreads().get(0);
-            context.drawText(client.textRenderer, Text.literal("Set estimé :"), x, y, COULEUR_TITRE, true);
-            y += hauteurLigne;
             context.drawText(client.textRenderer,
-                Text.literal(String.format("HP %d | Def %d | DéfSpé %d | %s",
-                    top.hpEv(), top.defEv(), top.spdEv(),
-                    ShowdownIdMapper.nature(top.natureShowdownId()))),
-                x, y, COULEUR_TEXTE, true);
+                Text.literal("Objet confirmé : " + objetConfirme), x, y, COULEUR_REVELE, true);
             y += hauteurLigne;
-
-            com.tropimon.randompvp.calc.ProfilAdversaire profil = ObservationCollector.getProfil(especeAdv);
-            if (profil != null && profil.getNbObservations() >= 3) {
-                StatHypothesis hypDef = profil.defense.nombreObservations >= profil.defenseSpe.nombreObservations
-                    ? profil.defense : profil.defenseSpe;
-                context.drawText(client.textRenderer,
-                    Text.literal(String.format("Inférence Def EV %d-%d", hypDef.evMin, hypDef.evMax)),
-                    x, y, COULEUR_TEXTE, true);
-                y += hauteurLigne;
-            }
-
-            // Objet : uniquement affiché quand on SAIT (jamais une supposition).
-            // Casque Brut / Restes : détectés par le motif de chip/soin.
-            // Écharpe Choix : il agit avant alors que sa vitesse max sans objet
-            // ne le permettrait pas. Bandeau/Lunettes Choix : ratio net x1.5.
-            // Orbe Vie : ratio net x1.3 + son propre recul de ~10% le même tour.
-            String objetConfirme = ObservationCollector.getObjetConfirme(especeAdv);
-            boolean objetRetire = ObservationCollector.estObjetConfirme(especeAdv) && objetConfirme == null;
-            if (objetConfirme != null) {
-                context.drawText(client.textRenderer,
-                    Text.literal("Objet confirmé : " + objetConfirme), x, y, COULEUR_REVELE, true);
-                y += hauteurLigne;
-            } else if (objetRetire) {
-                context.drawText(client.textRenderer,
-                    Text.literal("Objet confirmé : aucun (Sabotage)"), x, y, COULEUR_REVELE, true);
-                y += hauteurLigne;
-            }
+        } else if (objetRetire) {
+            y += 4;
+            context.drawText(client.textRenderer,
+                Text.literal("Objet confirmé : aucun (Sabotage)"), x, y, COULEUR_REVELE, true);
+            y += hauteurLigne;
         }
     }
 

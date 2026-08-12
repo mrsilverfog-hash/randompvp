@@ -80,13 +80,10 @@ public class ProfilAdversaire {
 
     private static StatHypothesis construireHypothese(Map<Stat, int[]> plages, Stat stat,
                                                        Set<String> objets, Set<String> talents) {
-        StatHypothesis h = new StatHypothesis(objets, talents);
-        int[] plage = plages.get(stat);
-        if (plage != null) {
-            h.evMin = plage[0];
-            h.evMax = plage[1];
-        }
-        return h;
+        // La plage d'EV Smogon n'est PAS appliquee : en random battle c'est 85
+        // partout. Seules les listes d'objets/talents candidats issues de Smogon
+        // restent utiles pour amorcer l'inference.
+        return new StatHypothesis(objets, talents);
     }
 
     /**

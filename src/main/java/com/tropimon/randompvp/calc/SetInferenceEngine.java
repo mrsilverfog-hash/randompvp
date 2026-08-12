@@ -42,69 +42,49 @@ public final class SetInferenceEngine {
         Set<String> objetsCandidats = hypothese.objetsPossibles;
         Set<String> talentsCandidats = hypothese.talentsPossibles;
 
-        int nouveauEvMin = 252;
-        int nouveauEvMax = 0;
-        boolean nouvBoostee = false;
-        boolean nouvNeutre = false;
-        boolean nouvBaissee = false;
         java.util.Set<String> nouveauxObjets = new java.util.HashSet<>();
         java.util.Set<String> nouveauxTalents = new java.util.HashSet<>();
         boolean auMoinsUneCombinaisonValide = false;
 
-        for (int ev = arrondirAuPlusProche4(hypothese.evMin); ev <= hypothese.evMax; ev += 4) {
-            for (NatureBoost natureBoost : NatureBoost.values()) {
-                if (natureBoost == NatureBoost.BOOSTEE && !hypothese.peutEtreBoostee) continue;
-                if (natureBoost == NatureBoost.NEUTRE && !hypothese.peutEtreNeutre) continue;
-                if (natureBoost == NatureBoost.BAISSEE && !hypothese.peutEtreBaissee) continue;
+        // Random battle : les EV (85) et la nature (neutre) sont connus, il n'y a
+        // rien a enumerer de ce cote. L'inference ne fait plus varier que l'objet
+        // et le talent — ce qui la rend nettement plus tranchante : tout ecart de
+        // degats residuel ne peut plus venir que de l'un des deux.
+        for (String objet : avecAucun(objetsCandidats)) {
+            for (String talent : avecAucun(talentsCandidats)) {
 
-                for (String objet : avecAucun(objetsCandidats)) {
-                    for (String talent : avecAucun(talentsCandidats)) {
+                Pokemon hypothetique =
+                    construirePokemonHypothetique(pokemonInconnuPartiel, objet, talent);
 
-                        Pokemon hypothetique = construirePokemonHypothetique(
-                            pokemonInconnuPartiel, statCible, ev, natureBoost, objet, talent);
+                Pokemon attaquant = estStatAttaquant ? hypothetique : pokemonConnu;
+                Pokemon defenseur = estStatAttaquant ? pokemonConnu : hypothetique;
 
-                        Pokemon attaquant = estStatAttaquant ? hypothetique : pokemonConnu;
-                        Pokemon defenseur = estStatAttaquant ? pokemonConnu : hypothetique;
+                DamageCalculator.Resultat resultat =
+                    DamageCalculator.calculer(attaquant, defenseur, capacite, terrain, null, false);
 
-                        DamageCalculator.Resultat resultat =
-                            DamageCalculator.calculer(attaquant, defenseur, capacite, terrain, null, false);
+                if (resultat.immunise) continue;
 
-                        if (resultat.immunise) continue;
+                boolean chevauche = resultat.pourcentageMin <= pourcentageObserveMax
+                    && resultat.pourcentageMax >= pourcentageObserveMin;
 
-                        boolean chevauche = resultat.pourcentageMin <= pourcentageObserveMax
-                            && resultat.pourcentageMax >= pourcentageObserveMin;
-
-                        if (chevauche) {
-                            auMoinsUneCombinaisonValide = true;
-                            nouveauEvMin = Math.min(nouveauEvMin, ev);
-                            nouveauEvMax = Math.max(nouveauEvMax, ev);
-                            if (natureBoost == NatureBoost.BOOSTEE) nouvBoostee = true;
-                            if (natureBoost == NatureBoost.NEUTRE) nouvNeutre = true;
-                            if (natureBoost == NatureBoost.BAISSEE) nouvBaissee = true;
-                            nouveauxObjets.add(objet);
-                            nouveauxTalents.add(talent);
-                        }
-                    }
+                if (chevauche) {
+                    auMoinsUneCombinaisonValide = true;
+                    nouveauxObjets.add(objet);
+                    nouveauxTalents.add(talent);
                 }
             }
         }
 
         if (!auMoinsUneCombinaisonValide) return;
 
-        hypothese.evMin = nouveauEvMin;
-        hypothese.evMax = nouveauEvMax;
-        hypothese.peutEtreBoostee = nouvBoostee;
-        hypothese.peutEtreNeutre = nouvNeutre;
-        hypothese.peutEtreBaissee = nouvBaissee;
+        // evMin/evMax et les drapeaux de nature ne sont plus mis a jour :
+        // ils restent fixes a 85 / neutre pour toute la duree du combat.
         hypothese.objetsPossibles.retainAll(nouveauxObjets);
         hypothese.talentsPossibles.retainAll(nouveauxTalents);
         hypothese.nombreObservations++;
     }
 
-    private enum NatureBoost { BOOSTEE, NEUTRE, BAISSEE }
-
-    private static Pokemon construirePokemonHypothetique(Pokemon base, Stat statCible, int ev,
-                                                           NatureBoost natureBoost, String objet, String talent) {
+    private static Pokemon construirePokemonHypothetique(Pokemon base, String objet, String talent) {
         Pokemon.Builder b = Pokemon.builder(base.getEspece(), base.getNiveau(), base.getType1(), base.getType2())
             .statBase(Stat.PV, base.getStatBase(Stat.PV))
             .statBase(Stat.ATTAQUE, base.getStatBase(Stat.ATTAQUE))
@@ -112,15 +92,15 @@ public final class SetInferenceEngine {
             .statBase(Stat.ATTAQUE_SPE, base.getStatBase(Stat.ATTAQUE_SPE))
             .statBase(Stat.DEFENSE_SPE, base.getStatBase(Stat.DEFENSE_SPE))
             .statBase(Stat.VITESSE, base.getStatBase(Stat.VITESSE))
-            .ev(statCible, ev)
             .teraType(base.getTeraType())
             .teracristallise(base.isTeracristallise());
 
+        // 31 IV / 85 EV partout / nature neutre : les parametres ev et
+        // natureBoost sont volontairement ignores, ils n'ont plus de sens ici.
+        RandomBattleFormat.appliquer(b);
+
         if (!StatHypothesis.AUCUN.equals(objet)) b.objet(objet);
         if (!StatHypothesis.AUCUN.equals(talent)) b.talent(talent);
-
-        Nature natureChoisie = trouverNaturePour(statCible, natureBoost);
-        b.nature(natureChoisie);
 
         Pokemon p = b.build();
         p.setStatut(base.getStatut());
@@ -131,22 +111,9 @@ public final class SetInferenceEngine {
         return p;
     }
 
-    private static Nature trouverNaturePour(Stat statCible, NatureBoost boost) {
-        if (boost == NatureBoost.NEUTRE) return Nature.HARDI;
-        for (Nature n : Nature.values()) {
-            if (boost == NatureBoost.BOOSTEE && n.getStatAugmentee() == statCible) return n;
-            if (boost == NatureBoost.BAISSEE && n.getStatDiminuee() == statCible) return n;
-        }
-        return Nature.HARDI;
-    }
-
     private static java.util.Set<String> avecAucun(Set<String> base) {
         java.util.Set<String> resultat = new java.util.HashSet<>(base);
         resultat.add(StatHypothesis.AUCUN);
         return resultat;
-    }
-
-    private static int arrondirAuPlusProche4(int valeur) {
-        return (valeur / 4) * 4;
     }
 }

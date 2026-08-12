@@ -18,12 +18,14 @@ public class StatHypothesis {
     /** Valeur sentinelle représentant explicitement "pas d'objet" ou "pas de talent pertinent". */
     public static final String AUCUN = "Aucun";
 
-    public int evMin = 0;
-    public int evMax = 252;
+    // Random battle : connus, jamais estimes. Conserves comme champs pour ne pas
+    // casser les appelants, mais ils ne bougent plus.
+    public int evMin = RandomBattleFormat.EV;
+    public int evMax = RandomBattleFormat.EV;
 
-    public boolean peutEtreBoostee = true;
+    public boolean peutEtreBoostee = false;
     public boolean peutEtreNeutre = true;
-    public boolean peutEtreBaissee = true;
+    public boolean peutEtreBaissee = false;
 
     /** Objets candidats restants (inclut toujours potentiellement AUCUN). */
     public final Set<String> objetsPossibles;
