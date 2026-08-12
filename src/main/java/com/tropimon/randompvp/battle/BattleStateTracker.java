@@ -1,0 +1,301 @@
+package com.tropimon.randompvp.battle;
+
+import com.cobblemon.mod.common.api.pokemon.PokemonProperties;
+import com.cobblemon.mod.common.api.pokemon.stats.Stats;
+import com.cobblemon.mod.common.client.CobblemonClient;
+import com.cobblemon.mod.common.client.battle.ActiveClientBattlePokemon;
+import com.cobblemon.mod.common.client.battle.ClientBattle;
+import com.cobblemon.mod.common.client.battle.ClientBattleActor;
+import com.cobblemon.mod.common.client.battle.ClientBattlePokemon;
+import com.cobblemon.mod.common.pokemon.Species;
+import com.cobblemon.mod.common.pokemon.status.PersistentStatus;
+import com.tropimon.randompvp.calc.Nature;
+import com.tropimon.randompvp.calc.Pokemon;
+import com.tropimon.randompvp.calc.RandomBattleFormat;
+import com.tropimon.randompvp.calc.PokemonType;
+import com.tropimon.randompvp.calc.ShowdownIdMapper;
+import com.tropimon.randompvp.calc.Stat;
+import net.minecraft.client.MinecraftClient;
+import net.minecraft.registry.Registries;
+
+import java.util.List;
+import java.util.UUID;
+
+public final class BattleStateTracker {
+
+    private BattleStateTracker() {
+    }
+
+    public static boolean estEnCombat() {
+        return CobblemonClient.INSTANCE.getBattle() != null;
+    }
+
+    public static Pokemon getJoueurActifDepuisEquipe() {
+        com.cobblemon.mod.common.pokemon.Pokemon complet = getPokemonCompletJoueur();
+        if (complet == null) return null;
+        return convertirPokemonComplet(complet);
+    }
+
+    public static Pokemon getJoueurActif() {
+        ClientBattleActor acteur = getActeurJoueur();
+        if (acteur == null) return null;
+        return premierActif(acteur);
+    }
+
+    public static Pokemon getAdversaireActif() {
+        ClientBattle battle = CobblemonClient.INSTANCE.getBattle();
+        ClientBattleActor acteurJoueur = getActeurJoueur();
+        if (battle == null || acteurJoueur == null) return null;
+        for (var side : battle.getSides()) {
+            if (!side.getActors().contains(acteurJoueur)) {
+                for (ClientBattleActor acteur : side.getActors()) {
+                    Pokemon p = premierActif(acteur);
+                    if (p != null) return p;
+                }
+            }
+        }
+        return null;
+    }
+
+    /** Équipe complète de l'adversaire (pour Seigneur Suprême et similaires). */
+    public static List<com.cobblemon.mod.common.pokemon.Pokemon> getEquipeAdversaire() {
+        ClientBattle battle = CobblemonClient.INSTANCE.getBattle();
+        ClientBattleActor acteurJoueur = getActeurJoueur();
+        if (battle == null || acteurJoueur == null) return null;
+        for (var side : battle.getSides()) {
+            if (!side.getActors().contains(acteurJoueur)) {
+                for (ClientBattleActor acteur : side.getActors()) {
+                    return acteur.getPokemon();
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Vrai si le Pokémon actif du joueur est transformé (Métamorph/Imposteur,
+     * Morphing) : l'espèce en combat diffère de celle de l'entité d'équipe.
+     */
+    public static boolean joueurEstTransforme() {
+        ClientBattleActor acteur = getActeurJoueur();
+        if (acteur == null || acteur.getActivePokemon().isEmpty()) return false;
+        ClientBattlePokemon actif = acteur.getActivePokemon().get(0).getBattlePokemon();
+        if (actif == null) return false;
+        try {
+            String especeCombat = actif.getSpecies().getName();
+            for (com.cobblemon.mod.common.pokemon.Pokemon p : acteur.getPokemon()) {
+                if (p.getUuid().equals(actif.getUuid())) {
+                    return !especeCombat.equalsIgnoreCase(p.getSpecies().getName());
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return false;
+    }
+
+    /** Le Pokémon adverse dont les capacités sont copiées quand on est transformé. */
+    public static com.cobblemon.mod.common.pokemon.Pokemon getSourceTransformation() {
+        ClientBattle battle = CobblemonClient.INSTANCE.getBattle();
+        ClientBattleActor acteurJoueur = getActeurJoueur();
+        if (battle == null || acteurJoueur == null) return null;
+        for (var side : battle.getSides()) {
+            if (!side.getActors().contains(acteurJoueur)) {
+                for (ClientBattleActor acteur : side.getActors()) {
+                    if (acteur.getActivePokemon().isEmpty()) continue;
+                    ClientBattlePokemon cbp = acteur.getActivePokemon().get(0).getBattlePokemon();
+                    if (cbp == null) continue;
+                    UUID uuid = cbp.getUuid();
+                    for (com.cobblemon.mod.common.pokemon.Pokemon p : acteur.getPokemon()) {
+                        if (p.getUuid().equals(uuid)) return p;
+                    }
+                }
+            }
+        }
+        return null;
+    }
+
+    /**
+     * Le Pokémon actif du joueur pour l'affichage des capacités.
+     * Si transformé (Imposteur), renvoie la source copiée afin d'afficher
+     * les capacités réellement disponibles, et non celles de Métamorph.
+     */
+    public static com.cobblemon.mod.common.pokemon.Pokemon getPokemonCompletJoueurAffichage() {
+        if (joueurEstTransforme()) {
+            com.cobblemon.mod.common.pokemon.Pokemon source = getSourceTransformation();
+            if (source != null) return source;
+        }
+        return getPokemonCompletJoueur();
+    }
+
+    public static com.cobblemon.mod.common.pokemon.Pokemon getPokemonCompletJoueur() {
+        ClientBattleActor acteur = getActeurJoueur();
+        if (acteur == null || acteur.getActivePokemon().isEmpty()) return null;
+        ClientBattlePokemon actif = acteur.getActivePokemon().get(0).getBattlePokemon();
+        if (actif == null) return null;
+        UUID uuid = actif.getUuid();
+        for (com.cobblemon.mod.common.pokemon.Pokemon p : acteur.getPokemon()) {
+            if (p.getUuid().equals(uuid)) return p;
+        }
+        return null;
+    }
+
+    /** Renvoie la liste des Pokémon de l'équipe du joueur (pour l'aperçu de switch). */
+    public static List<com.cobblemon.mod.common.pokemon.Pokemon> getEquipeJoueur() {
+        ClientBattleActor acteur = getActeurJoueur();
+        if (acteur == null) return null;
+        return acteur.getPokemon();
+    }
+
+    /** Convertit un membre de l'équipe en calc.Pokemon (vraies stats). */
+    public static Pokemon convertirMembre(com.cobblemon.mod.common.pokemon.Pokemon p) {
+        return convertirPokemonComplet(p);
+    }
+
+    private static ClientBattleActor getActeurJoueur() {
+        ClientBattle battle = CobblemonClient.INSTANCE.getBattle();
+        if (battle == null) return null;
+        var joueur = MinecraftClient.getInstance().player;
+        if (joueur == null) return null;
+        UUID uuid = joueur.getUuid();
+        for (var side : battle.getSides()) {
+            for (ClientBattleActor acteur : side.getActors()) {
+                if (acteur.getUuid().equals(uuid)) return acteur;
+            }
+        }
+        return null;
+    }
+
+    private static Pokemon premierActif(ClientBattleActor acteur) {
+        if (acteur.getActivePokemon().isEmpty()) return null;
+        ClientBattlePokemon cbp = acteur.getActivePokemon().get(0).getBattlePokemon();
+        if (cbp == null) return null;
+        return convertir(cbp);
+    }
+
+    private static Pokemon convertir(ClientBattlePokemon cbp) {
+        Species espece = cbp.getSpecies();
+        PokemonProperties props = cbp.getProperties();
+
+        var forme = espece.getForm(cbp.getState().getCurrentAspects());
+        PokemonType type1 = ShowdownIdMapper.type(forme.getPrimaryType().getName());
+        PokemonType type2 = forme.getSecondaryType() != null
+            ? ShowdownIdMapper.type(forme.getSecondaryType().getName()) : null;
+
+        Pokemon.Builder builder = Pokemon.builder(props.getSpecies(), cbp.getLevel(), type1, type2)
+            .statBase(Stat.PV, statBase(forme, Stats.HP))
+            .statBase(Stat.ATTAQUE, statBase(forme, Stats.ATTACK))
+            .statBase(Stat.DEFENSE, statBase(forme, Stats.DEFENCE))
+            .statBase(Stat.ATTAQUE_SPE, statBase(forme, Stats.SPECIAL_ATTACK))
+            .statBase(Stat.DEFENSE_SPE, statBase(forme, Stats.SPECIAL_DEFENCE))
+            .statBase(Stat.VITESSE, statBase(forme, Stats.SPEED))
+            .poids(forme.getWeight());
+
+        if (props.getAbility() != null) {
+            String t = ShowdownIdMapper.talent(props.getAbility());
+            if (t != null) builder.talent(t);
+        }
+        if (props.getHeldItem() != null) {
+            String o = ShowdownIdMapper.objet(props.getHeldItem());
+            if (o != null) builder.objet(o);
+        }
+        if (props.getTeraType() != null) {
+            PokemonType tera = ShowdownIdMapper.type(props.getTeraType());
+            if (tera != null) builder.teraType(tera);
+        }
+        // Random battle : IV/EV/nature identiques pour tout le monde.
+        // On ignore délibérément props.getIvs()/getEvs()/getNature() — côté
+        // adverse ces champs sont partiels ou absents, et côté joueur ils
+        // reflètent le Pokémon stocké, pas celui généré pour le combat.
+        RandomBattleFormat.appliquer(builder);
+
+        Pokemon pokemon = builder.build();
+
+        if (cbp.isHpFlat()) {
+            pokemon.setPvActuels(Math.round(cbp.getHpValue()));
+        } else {
+            pokemon.setPvActuels(Math.round(cbp.getHpValue() * pokemon.getPvMax()));
+        }
+
+        PersistentStatus statut = cbp.getStatus();
+        if (statut != null) {
+            switch (statut.getShowdownName()) {
+                case "brn" -> pokemon.setStatut(Pokemon.Statut.BRULURE);
+                case "par" -> pokemon.setStatut(Pokemon.Statut.PARALYSIE);
+                case "psn" -> pokemon.setStatut(Pokemon.Statut.POISON);
+                case "tox" -> pokemon.setStatut(Pokemon.Statut.POISON_GRAVE);
+                case "slp" -> pokemon.setStatut(Pokemon.Statut.SOMMEIL);
+                case "frz" -> pokemon.setStatut(Pokemon.Statut.GEL);
+                default -> pokemon.setStatut(Pokemon.Statut.AUCUN);
+            }
+        }
+
+        if (cbp.getStatChanges() != null) {
+            Integer atk = cbp.getStatChanges().get(Stats.ATTACK);
+            Integer def = cbp.getStatChanges().get(Stats.DEFENCE);
+            Integer spa = cbp.getStatChanges().get(Stats.SPECIAL_ATTACK);
+            Integer spd = cbp.getStatChanges().get(Stats.SPECIAL_DEFENCE);
+            Integer spe = cbp.getStatChanges().get(Stats.SPEED);
+            if (atk != null) pokemon.setStage(Stat.ATTAQUE, atk);
+            if (def != null) pokemon.setStage(Stat.DEFENSE, def);
+            if (spa != null) pokemon.setStage(Stat.ATTAQUE_SPE, spa);
+            if (spd != null) pokemon.setStage(Stat.DEFENSE_SPE, spd);
+            if (spe != null) pokemon.setStage(Stat.VITESSE, spe);
+        }
+
+        return pokemon;
+    }
+
+    private static Pokemon convertirPokemonComplet(com.cobblemon.mod.common.pokemon.Pokemon p) {
+        Species espece = p.getSpecies();
+
+        var forme = espece.getForm(p.getAspects());
+        PokemonType type1 = ShowdownIdMapper.type(forme.getPrimaryType().getName());
+        PokemonType type2 = forme.getSecondaryType() != null
+            ? ShowdownIdMapper.type(forme.getSecondaryType().getName()) : null;
+
+        Pokemon.Builder builder = Pokemon.builder(espece.showdownId(), p.getLevel(), type1, type2)
+            .statBase(Stat.PV, statBase(forme, Stats.HP))
+            .statBase(Stat.ATTAQUE, statBase(forme, Stats.ATTACK))
+            .statBase(Stat.DEFENSE, statBase(forme, Stats.DEFENCE))
+            .statBase(Stat.ATTAQUE_SPE, statBase(forme, Stats.SPECIAL_ATTACK))
+            .statBase(Stat.DEFENSE_SPE, statBase(forme, Stats.SPECIAL_DEFENCE))
+            .statBase(Stat.VITESSE, statBase(forme, Stats.SPEED))
+            .poids(forme.getWeight());
+
+        // Random battle : profil de stats imposé, on n'utilise pas les
+        // IV/EV/nature stockés sur l'entité d'équipe.
+        RandomBattleFormat.appliquer(builder);
+
+        String talentFr = ShowdownIdMapper.talent(p.getAbility().getName());
+        if (talentFr != null) builder.talent(talentFr);
+
+        if (!p.heldItem().isEmpty()) {
+            var itemId = Registries.ITEM.getId(p.heldItem().getItem());
+            if (itemId != null) {
+                String objetFr = ShowdownIdMapper.objet(itemId.getPath());
+                if (objetFr != null) builder.objet(objetFr);
+            }
+        }
+
+        Pokemon pokemon = builder.build();
+        pokemon.setPvActuels(p.getCurrentHealth());
+
+        if (p.getStatus() != null) {
+            switch (p.getStatus().getStatus().getShowdownName()) {
+                case "brn" -> pokemon.setStatut(Pokemon.Statut.BRULURE);
+                case "par" -> pokemon.setStatut(Pokemon.Statut.PARALYSIE);
+                case "psn" -> pokemon.setStatut(Pokemon.Statut.POISON);
+                case "tox" -> pokemon.setStatut(Pokemon.Statut.POISON_GRAVE);
+                case "slp" -> pokemon.setStatut(Pokemon.Statut.SOMMEIL);
+                case "frz" -> pokemon.setStatut(Pokemon.Statut.GEL);
+            }
+        }
+
+        return pokemon;
+    }
+
+    private static int statBase(com.cobblemon.mod.common.pokemon.FormData forme, Stats stat) {
+        Integer valeur = forme.getBaseStats().get(stat);
+        return valeur != null ? valeur : 0;
+    }
+}

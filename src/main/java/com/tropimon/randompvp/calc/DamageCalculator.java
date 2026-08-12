@@ -1,0 +1,783 @@
+package com.tropimon.randompvp.calc;
+
+import java.util.Map;
+
+public class DamageCalculator {
+
+    public static class Resultat {
+        public final int[] degatsParRoll;
+        public final int degatsMin;
+        public final int degatsMax;
+        public final double pourcentageMin;
+        public final double pourcentageMax;
+        public final boolean immunise;
+        public final boolean koGaranti;
+        public final boolean koPossible;
+        public final double efficaciteType;
+
+        private Resultat(int[] degatsParRoll, double pvMaxDefenseur, int pvActuelsDefenseur,
+                          boolean immunise, double efficaciteType, String defenseurRobuste,
+                          String defenseurObjet, boolean capacitePhysique) {
+            this.degatsParRoll = degatsParRoll;
+            this.immunise = immunise;
+            this.efficaciteType = efficaciteType;
+
+            if (degatsParRoll.length == 0) {
+                this.degatsMin = 0;
+                this.degatsMax = 0;
+                this.pourcentageMin = 0;
+                this.pourcentageMax = 0;
+                this.koGaranti = false;
+                this.koPossible = false;
+                return;
+            }
+
+            int degatsBrutMin = degatsParRoll[0];
+            int degatsBrutMax = degatsParRoll[degatsParRoll.length - 1];
+
+            // Tête de Gel (Bekaglaçon) : bloque TOTALEMENT (0 dégât, pas de
+            // coût fixe) le premier coup de catégorie PHYSIQUE si intact.
+            // Ne protège PAS contre le spécial, même Choc Psy/Lame Ointe qui
+            // utilisent la Défense physique mais restent catégorie spéciale.
+            boolean teteDeGelActive = "Tête de Gel".equals(defenseurRobuste)
+                && pvActuelsDefenseur == (int) pvMaxDefenseur
+                && capacitePhysique;
+            if (teteDeGelActive) {
+                degatsBrutMin = 0;
+                degatsBrutMax = 0;
+            }
+
+            // Fantômasque (Mimiquant/Mimigal) : le déguisement intact absorbe
+            // le coup, remplacé par exactement 1/8 des PV max de "costume
+            // brisé" (pas les dégâts réels de la capacité). Approximation :
+            // "déguisement intact" = à pleins PV (pas de suivi d'état dédié).
+            boolean deguisementIntact = "Fantômasque".equals(defenseurRobuste)
+                && pvActuelsDefenseur == (int) pvMaxDefenseur;
+            if (deguisementIntact) {
+                int cout = Math.max(1, (int) (pvMaxDefenseur / 8));
+                degatsBrutMin = cout;
+                degatsBrutMax = cout;
+            }
+            this.degatsMin = degatsBrutMin;
+            this.degatsMax = degatsBrutMax;
+            this.pourcentageMin = pvMaxDefenseur == 0 ? 0 : (100.0 * this.degatsMin) / pvMaxDefenseur;
+            this.pourcentageMax = pvMaxDefenseur == 0 ? 0 : (100.0 * this.degatsMax) / pvMaxDefenseur;
+
+            // Robuste ou Ceinture Focus : survit à 1 PV sur un coup fatal
+            // si à pleins PV (garanti, pas de chance d'échec pour ces deux-là)
+            boolean protectionActive = ("Robuste".equals(defenseurRobuste)
+                || "Ceinture Focus".equals(defenseurObjet))
+                && pvActuelsDefenseur == (int) pvMaxDefenseur;
+            if (protectionActive) {
+                this.koGaranti = false;
+                this.koPossible = degatsMax >= pvActuelsDefenseur && degatsMin < pvActuelsDefenseur;
+            } else {
+                this.koGaranti = degatsMin >= pvActuelsDefenseur;
+                this.koPossible = degatsMax >= pvActuelsDefenseur;
+            }
+        }
+
+        public static Resultat immunise() { return new Resultat(new int[0], 0, 0, true, 0.0, null, null, false); }
+        public static Resultat sansDegats() { return new Resultat(new int[0], 0, 0, false, 1.0, null, null, false); }
+
+        private static Resultat depuis(int[] degats, Pokemon defenseur, double efficacite, Move capacite) {
+            return new Resultat(degats, defenseur.getPvMax(), defenseur.getPvActuels(), false, efficacite,
+                defenseur.getTalent(), defenseur.getObjet(),
+                capacite.getCategorie() == Move.Categorie.PHYSIQUE);
+        }
+    }
+
+    private DamageCalculator() {}
+
+    public static Resultat calculer(Pokemon attaquant, Pokemon defenseur, Move capacite,
+                                     Field terrain, Field.Ecrans ecransDefenseur, boolean critique) {
+
+        if (capacite.estCapaciteDeStatut()) {
+            return Resultat.sansDegats();
+        }
+
+        // Ball'Météo : change de type et double de puissance selon la météo
+        capacite = capaciteEffective(capacite, terrain);
+
+        ModifierContext ctx = new ModifierContext(attaquant, defenseur, capacite, terrain, critique);
+
+        AbilityModifier talentAttaquant = AbilityModifier.pour(attaquant.getTalent());
+        if (talentAttaquant != null) talentAttaquant.appliquerCoteAttaquant(ctx);
+        ItemModifier objetAttaquant = ItemModifier.pour(attaquant.getObjet());
+        if (objetAttaquant != null) objetAttaquant.appliquerCoteAttaquant(ctx);
+
+        AbilityModifier talentDefenseur = AbilityModifier.pour(defenseur.getTalent());
+        // Brise Moule/Turboblaze/Téravolt ignorent le talent défensif de la
+        // cible (Garde Mystik, Lévitation, Filtre, Multi-écailles, Pare-Balles,
+        // Anti-Bruit, etc. n'ont alors aucun effet) - SAUF si le défenseur
+        // porte Garde-Talent, qui protège explicitement contre ce contournement.
+        boolean ignoreTalentDefenseur = ("Brise Moule".equals(attaquant.getTalent())
+            || "Turboblaze".equals(attaquant.getTalent())
+            || "Téravolt".equals(attaquant.getTalent()))
+            && !"Garde-Talent".equals(defenseur.getObjet());
+        if (talentDefenseur != null && !ignoreTalentDefenseur) talentDefenseur.appliquerCoteDefenseur(ctx);
+        ItemModifier objetDefenseur = ItemModifier.pour(defenseur.getObjet());
+        if (objetDefenseur != null) objetDefenseur.appliquerCoteDefenseur(ctx);
+
+        // Talents "de Ruine" (Gen 9) : réduisent une stat de -25% chez TOUS
+        // les Pokémon sur le terrain SAUF leur porteur. Portée globale, donc
+        // le porteur peut être l'attaquant OU le défenseur de ce calcul —
+        // seul celui qui NE porte PAS le talent est affecté (le porteur
+        // s'exclut lui-même). Chaque Ruine ne touche QUE sa propre stat
+        // (physique/spéciale) pour éviter un cumul erroné avec sa jumelle
+        // si les deux sont actives simultanément sur le terrain.
+        boolean physique = capacite.getCategorie() == Move.Categorie.PHYSIQUE;
+        // Choc Psy/Frappe Psy/Lame Ointe : catégorie SPÉCIALE mais utilisent
+        // la Défense PHYSIQUE du défenseur. Épée du Fléau (qui réduit la
+        // Défense) doit donc s'appliquer même si la capacité est spéciale -
+        // seul le routage DÉFENSIF en tient compte (Tablettes/Perles restent
+        // indexées sur la catégorie standard : les cas Tricherie et Choc
+        // Pied, où la stat OFFENSIVE réelle diverge aussi de la catégorie,
+        // sont une limite connue non corrigée ici).
+        String nomPourRuine = capacite.getNom();
+        boolean statDefUtiliseeEstPhysique = physique
+            || "psyshock".equals(nomPourRuine) || "psystrike".equals(nomPourRuine)
+            || "secretsword".equals(nomPourRuine);
+
+        // Épée du Fléau (Chien-Pao) : -25% Défense de tous sauf le porteur.
+        if (statDefUtiliseeEstPhysique) {
+            boolean attEpee = "Épée du Fléau".equals(attaquant.getTalent());
+            boolean defEpee = "Épée du Fléau".equals(defenseur.getTalent());
+            if (attEpee && !defEpee) ctx.multiplicateurDefense *= 0.75;
+        } else {
+            // Perles du Fléau (Chi-Yu) : -25% Défense Spéciale de tous sauf
+            // le porteur (nom vérifié sur Poképédia, la stat concernée est
+            // bien la Défense Spéciale, pas l'Attaque Spéciale).
+            boolean attPerles = "Perles du Fléau".equals(attaquant.getTalent());
+            boolean defPerles = "Perles du Fléau".equals(defenseur.getTalent());
+            if (attPerles && !defPerles) ctx.multiplicateurDefense *= 0.75;
+        }
+
+        // Tablettes du Fléau (Wo-Chien) : -25% Attaque de tous sauf le porteur.
+        if (physique) {
+            boolean attTablettes = "Tablettes du Fléau".equals(attaquant.getTalent());
+            boolean defTablettes = "Tablettes du Fléau".equals(defenseur.getTalent());
+            if (defTablettes && !attTablettes) ctx.multiplicateurAttaque *= 0.75;
+        } else {
+            // Urne du Fléau (Ting-Lu) : -25% Attaque Spéciale de tous sauf
+            // le porteur (nom vérifié sur Poképédia, la stat concernée est
+            // bien l'Attaque Spéciale, pas la Défense Spéciale).
+            boolean attUrne = "Urne du Fléau".equals(attaquant.getTalent());
+            boolean defUrne = "Urne du Fléau".equals(defenseur.getTalent());
+            if (defUrne && !attUrne) ctx.multiplicateurAttaque *= 0.75;
+        }
+
+        // Aura Sombre / Aura Fée (Yveltal/Xerneas) : +33% dégâts du type
+        // correspondant pour TOUS les Pokémon sur le terrain (portée globale,
+        // comme les Ruines), inversé en -25% si l'un des deux actifs a Aura
+        // Brisée (Aura Break neutralise et inverse les deux auras à la fois).
+        boolean auraSombreActive = "Aura Sombre".equals(attaquant.getTalent())
+            || "Aura Sombre".equals(defenseur.getTalent());
+        boolean auraFeeActive = "Aura Fée".equals(attaquant.getTalent())
+            || "Aura Fée".equals(defenseur.getTalent());
+        boolean auraBrisee = "Aura Brisée".equals(attaquant.getTalent())
+            || "Aura Brisée".equals(defenseur.getTalent());
+        if (auraSombreActive && capacite.getType() == PokemonType.TENEBRES) {
+            ctx.multiplicateurDegatsFinal *= auraBrisee ? 0.75 : 1.33;
+        }
+        if (auraFeeActive && capacite.getType() == PokemonType.FEE) {
+            ctx.multiplicateurDegatsFinal *= auraBrisee ? 0.75 : 1.33;
+        }
+
+        if (ctx.immuniteType) return Resultat.immunise();
+
+        double efficacite = calculerEfficaciteType(capacite, defenseur, attaquant);
+        if (efficacite == 0.0) return Resultat.immunise();
+
+        // Dégâts fixes : ignorent stats, boosts, STAB et efficacité (sauf immunité)
+        Integer fixes = degatsFixes(capacite, attaquant);
+        if (fixes != null) {
+            int[] d = new int[16];
+            java.util.Arrays.fill(d, Math.max(1, fixes));
+            return Resultat.depuis(d, defenseur, efficacite, capacite);
+        }
+
+        appliquerModificateursConditionnels(ctx, efficacite, attaquant, defenseur);
+
+        // Puissance effective : gère Sabotage, Gyroball, Boule Élek, Châtiment,
+        // Façade, Balayage, Nœud Herbe, Tacle Lourd, Tacle Feu.
+        // Doit être calculée AVANT les stats : Façade pose ignorerPenaliteBrulure.
+        int puissance = puissanceEffective(capacite, attaquant, defenseur, ctx, terrain.getMeteo());
+        if (puissance <= 0) {
+            return Resultat.sansDegats();
+        }
+
+        Stat statOffensive = capacite.getCategorie() == Move.Categorie.PHYSIQUE ? Stat.ATTAQUE : Stat.ATTAQUE_SPE;
+        // Body Press utilise la Défense de l'attaquant
+        if ("bodypress".equals(capacite.getNom())) {
+            statOffensive = Stat.DEFENSE;
+        }
+        Stat statDefensive = capacite.getCategorie() == Move.Categorie.PHYSIQUE ? Stat.DEFENSE : Stat.DEFENSE_SPE;
+        // Choc Psy / Frappe Psy / Lame Ointe : capacités spéciales frappant la Défense physique
+        // (contourne aussi le boost Déf. Spé. des types Roche sous tempête de sable)
+        String nomCapacite = capacite.getNom();
+        if ("psyshock".equals(nomCapacite) || "psystrike".equals(nomCapacite)
+            || "secretsword".equals(nomCapacite)) {
+            statDefensive = Stat.DEFENSE;
+        }
+
+        int statA = calculerStatOffensiveEffective(attaquant, capacite, ctx, statOffensive, critique);
+        int statD = calculerStatDefensiveEffective(defenseur, terrain, ctx, statDefensive, critique);
+
+        // Tricherie : utilise l'Attaque du DÉFENSEUR (avec ses stages, sans son objet
+        // ni son talent), mais la brûlure de l'attaquant s'applique quand même
+        if ("foulplay".equals(nomCapacite)) {
+            int atk = defenseur.getStatCalculee(Stat.ATTAQUE);
+            int stage = defenseur.getStage(Stat.ATTAQUE);
+            if (critique && stage < 0) stage = 0;
+            double mult = stage >= 0 ? (2.0 + stage) / 2.0 : 2.0 / (2.0 - stage);
+            atk = (int) (atk * mult);
+            if (attaquant.getStatut() == Pokemon.Statut.BRULURE && !ctx.ignorerPenaliteBrulure) {
+                atk = (int) (atk * 0.5);
+            }
+            statA = atk;
+        }
+
+        int niveauTerme = (2 * attaquant.getNiveau()) / 5 + 2;
+        long base = ((long) niveauTerme * puissance * statA) / Math.max(1, statD);
+        base = base / 50 + 2;
+
+        double stab = calculerSTAB(attaquant, capacite, ctx);
+        double meteo = terrain.multiplicateurMeteo(capacite.getType());
+        double champTerrain = estAuSol(attaquant) ? terrain.multiplicateurTerrain(capacite.getType()) : 1.0;
+        double champTerrainDef = multiplicateurTerrainDefensif(terrain, capacite, defenseur);
+        double ecrans = (!critique && ecransDefenseur != null)
+            ? ecransDefenseur.multiplicateur(capacite.getCategorie())
+            : 1.0;
+        double critMult = critique ? 1.5 : 1.0;
+
+        int[] degats = new int[16];
+        // Le jeu regroupe écrans, terrain et objets/talents (Ceinture Pro,
+        // Filtre, Orbe Vie...) en UNE seule étape "other", arrondie une fois —
+        // pas trois arrondis séquentiels, qui grignoteraient des dégâts en trop.
+        double autre = ecrans * champTerrain * champTerrainDef * ctx.multiplicateurDegatsFinal;
+        for (int i = 0; i < 16; i++) {
+            double alea = (85 + i) / 100.0;
+            long d = base;
+            d = appliquerEtFloor(d, meteo);
+            d = appliquerEtFloor(d, critMult);
+            d = appliquerEtFloor(d, alea);
+            d = appliquerEtFloor(d, stab);
+            d = appliquerEtFloor(d, efficacite);
+            d = appliquerEtFloor(d, autre);
+            degats[i] = (int) Math.max(1, d);
+        }
+
+        // Multi-coups : total = dégâts par coup x nombre de coups
+        // (interpolation coupsMin -> coupsMax du roll min au roll max)
+        int[] coups = coupsEffectifs(capacite, attaquant);
+        if (coups[1] > 1) {
+            for (int i = 0; i < 16; i++) {
+                double c = coups[0] + (coups[1] - coups[0]) * (i / 15.0);
+                degats[i] = (int) Math.round(degats[i] * c);
+            }
+        }
+
+        return Resultat.depuis(degats, defenseur, efficacite, capacite);
+    }
+
+    // Capacités multi-coups (id showdown -> {coups min, coups max})
+    private static final Map<String, int[]> MULTI_COUPS = Map.ofEntries(
+        // 2 coups fixes
+        Map.entry("doublekick", new int[]{2, 2}),
+        Map.entry("bonemerang", new int[]{2, 2}),
+        Map.entry("doublehit", new int[]{2, 2}),
+        Map.entry("dualwingbeat", new int[]{2, 2}),
+        Map.entry("dragondarts", new int[]{2, 2}),
+        Map.entry("geargrind", new int[]{2, 2}),
+        Map.entry("twineedle", new int[]{2, 2}),
+        Map.entry("dualchop", new int[]{2, 2}),
+        Map.entry("twinbeam", new int[]{2, 2}),
+        Map.entry("tachyoncutter", new int[]{2, 2}),
+        // 3 coups fixes
+        Map.entry("surgingstrikes", new int[]{3, 3}),
+        Map.entry("tripledive", new int[]{3, 3}),
+        // 2 à 5 coups
+        Map.entry("bulletseed", new int[]{2, 5}),
+        Map.entry("rockblast", new int[]{2, 5}),
+        Map.entry("iciclespear", new int[]{2, 5}),
+        Map.entry("pinmissile", new int[]{2, 5}),
+        Map.entry("tailslap", new int[]{2, 5}),
+        Map.entry("scaleshot", new int[]{2, 5}),
+        Map.entry("furyswipes", new int[]{2, 5}),
+        Map.entry("doubleslap", new int[]{2, 5}),
+        Map.entry("furyattack", new int[]{2, 5}),
+        Map.entry("spikecannon", new int[]{2, 5}),
+        Map.entry("barrage", new int[]{2, 5}),
+        Map.entry("cometpunch", new int[]{2, 5}),
+        Map.entry("armthrust", new int[]{2, 5}),
+        Map.entry("bonerush", new int[]{2, 5}),
+        Map.entry("watershuriken", new int[]{2, 5}),
+        // 10 coups
+        Map.entry("populationbomb", new int[]{10, 10})
+    );
+
+    /**
+     * Nombre de coups effectifs {min, max}.
+     * Multi-Coups (Skill Link) : toujours le max.
+     * Dé Pipé (Loaded Dice) : 4 à 5 coups pour les capacités 2-5.
+     */
+    private static int[] coupsEffectifs(Move capacite, Pokemon attaquant) {
+        int[] base = MULTI_COUPS.get(capacite.getNom());
+        if (base == null) return new int[]{1, 1};
+        int min = base[0];
+        int max = base[1];
+        if (min != max) {
+            if ("Multi-Coups".equals(attaquant.getTalent())) {
+                min = max;
+            } else if ("Dé Pipé".equals(attaquant.getObjet())) {
+                min = Math.max(min, max - 1);
+            }
+        }
+        return new int[]{min, max};
+    }
+
+    /** Nombre maximal de coups d'une capacité (1 si mono-coup). Pour le recul par contact. */
+    public static int nombreDeCoupsMax(Move capacite, Pokemon attaquant) {
+        return coupsEffectifs(capacite, attaquant)[1];
+    }
+
+    private static long appliquerEtFloor(long valeur, double multiplicateur) {
+        return (long) Math.floor(valeur * multiplicateur);
+    }
+
+    /**
+     * Capacités à dégâts fixes. Retourne null si la capacité n'en est pas une.
+     * Riposte et Voile Miroir dépendent des dégâts reçus (imprévisibles), donc exclus.
+     */
+    private static Integer degatsFixes(Move capacite, Pokemon attaquant) {
+        String nom = capacite.getNom();
+        if (nom == null) return null;
+        return switch (nom) {
+            // Frappe Atlas / Ombre Nocturne : dégâts = niveau de l'attaquant
+            case "seismictoss", "nightshade" -> attaquant.getNiveau();
+            case "sonicboom" -> 20;
+            case "dragonrage" -> 40;
+            // Requiem Final : dégâts = PV actuels de l'attaquant (qui se met KO)
+            case "finalgambit" -> attaquant.getPvActuels();
+            default -> null;
+        };
+    }
+
+    /**
+     * Transforme la capacité si son type dépend du contexte.
+     * Ball'Météo : Feu/Eau/Roche/Glace et puissance 100 selon la météo.
+     */
+    private static Move capaciteEffective(Move capacite, Field terrain) {
+        if (!"weatherball".equals(capacite.getNom())) return capacite;
+        PokemonType nouveauType = switch (terrain.getMeteo()) {
+            case SOLEIL, SOLEIL_INTENSE -> PokemonType.FEU;
+            case PLUIE, PLUIE_INTENSE -> PokemonType.EAU;
+            case SABLE -> PokemonType.ROCHE;
+            case NEIGE -> PokemonType.GLACE;
+            default -> null;
+        };
+        if (nouveauType == null) return capacite;
+        return Move.builder("weatherball", nouveauType, capacite.getCategorie())
+            .puissance(100).build();
+    }
+
+    /**
+     * Puissance effective des capacités à puissance variable.
+     * Les capacités variables ont une puissance de base de 0 dans les données
+     * Showdown : sans ce calcul, elles affichaient zéro dégât.
+     */
+    private static int puissanceEffective(Move capacite, Pokemon attaquant, Pokemon defenseur,
+                                           ModifierContext ctx, Field.Meteo meteo) {
+        int puissance = capacite.getPuissanceDeBase();
+        String nom = capacite.getNom();
+        if (nom == null) return puissance;
+
+        switch (nom) {
+            case "knockoff" -> {
+                // Sabotage : x1.5 si le défenseur tient un objet
+                if (defenseur.getObjet() != null) puissance = (int) (puissance * 1.5);
+            }
+            case "facade" -> {
+                // Façade : x2 si brûlure, poison ou paralysie ; ignore la pénalité de brûlure
+                Pokemon.Statut s = attaquant.getStatut();
+                if (s == Pokemon.Statut.BRULURE || s == Pokemon.Statut.POISON
+                    || s == Pokemon.Statut.POISON_GRAVE || s == Pokemon.Statut.PARALYSIE) {
+                    puissance *= 2;
+                    ctx.ignorerPenaliteBrulure = true;
+                }
+            }
+            case "hex" -> {
+                // Châtiment : x2 si le défenseur a un statut
+                if (defenseur.getStatut() != Pokemon.Statut.AUCUN) puissance *= 2;
+            }
+            case "gyroball" -> {
+                // Gyroball : 25 x Vit. défenseur / Vit. attaquant + 1, max 150
+                double vitAtt = Math.max(1, vitesseEnCombat(attaquant, meteo));
+                double vitDef = vitesseEnCombat(defenseur, meteo);
+                puissance = (int) Math.min(150, Math.floor(25.0 * vitDef / vitAtt) + 1);
+                puissance = Math.max(1, puissance);
+            }
+            case "electroball" -> {
+                // Boule Élek : paliers selon le ratio Vit. attaquant / Vit. défenseur
+                double vitAtt = vitesseEnCombat(attaquant, meteo);
+                double vitDef = Math.max(1, vitesseEnCombat(defenseur, meteo));
+                double ratio = vitAtt / vitDef;
+                if (ratio >= 4) puissance = 150;
+                else if (ratio >= 3) puissance = 120;
+                else if (ratio >= 2) puissance = 80;
+                else if (ratio >= 1) puissance = 60;
+                else puissance = 40;
+            }
+            case "lowkick", "grassknot" -> {
+                // Balayage / Nœud Herbe : paliers selon le poids du défenseur (hg)
+                double poids = poidsEffectif(defenseur);
+                if (poids <= 0) puissance = 60; // poids inconnu : valeur médiane
+                else if (poids >= 2000) puissance = 120;
+                else if (poids >= 1000) puissance = 100;
+                else if (poids >= 500) puissance = 80;
+                else if (poids >= 250) puissance = 60;
+                else if (poids >= 100) puissance = 40;
+                else puissance = 20;
+            }
+            case "heavyslam", "heatcrash" -> {
+                // Tacle Lourd / Tacle Feu : paliers selon le ratio de poids attaquant/défenseur
+                double poidsAtt = poidsEffectif(attaquant);
+                double poidsDef = poidsEffectif(defenseur);
+                if (poidsAtt <= 0 || poidsDef <= 0) {
+                    puissance = 80; // poids inconnu : valeur médiane
+                } else {
+                    double ratio = poidsAtt / poidsDef;
+                    if (ratio >= 5) puissance = 120;
+                    else if (ratio >= 4) puissance = 100;
+                    else if (ratio >= 3) puissance = 80;
+                    else if (ratio >= 2) puissance = 60;
+                    else puissance = 40;
+                }
+            }
+            case "return", "frustration" -> {
+                // Retour / Frustration : bonheur inconnu, on suppose la puissance max
+                puissance = 102;
+            }
+            case "hiddenpower" -> {
+                // Puissance Cachée : 60 fixe depuis la 6G (type non déductible des IVs adverses)
+                puissance = 60;
+            }
+            case "acrobatics" -> {
+                // Acrobatie : x2 si l'attaquant n'a pas d'objet
+                if (attaquant.getObjet() == null) puissance *= 2;
+            }
+            case "storedpower", "powertrip" -> {
+                // Force Ajoutée / Total Contrôle : 20 + 20 par boost positif de l'attaquant
+                int boosts = 0;
+                for (Stat s : Stat.values()) {
+                    if (s != Stat.PV) boosts += Math.max(0, attaquant.getStage(s));
+                }
+                puissance = 20 + 20 * boosts;
+            }
+            case "flail", "reversal" -> {
+                // Fléau / Contre : paliers selon les PV restants de l'attaquant
+                int pvMax = Math.max(1, attaquant.getPvMax());
+                int p = (48 * attaquant.getPvActuels()) / pvMax;
+                if (p >= 33) puissance = 20;
+                else if (p >= 17) puissance = 40;
+                else if (p >= 10) puissance = 80;
+                else if (p >= 5) puissance = 100;
+                else if (p >= 2) puissance = 150;
+                else puissance = 200;
+            }
+            case "triplekick" -> {
+                // Triple Pied : 10+20+30, affiché comme total
+                puissance = 60;
+            }
+            case "tripleaxel" -> {
+                // Triple Axel : 20+40+60, affiché comme total
+                puissance = 120;
+            }
+            case "eruption", "waterspout", "dragonenergy" -> {
+                // Éruption / Giclédo / Draco-Énergie : 150 x PV restants / PV max
+                int pvMax = Math.max(1, attaquant.getPvMax());
+                puissance = Math.max(1, (150 * attaquant.getPvActuels()) / pvMax);
+            }
+            default -> { /* puissance de base inchangée */ }
+        }
+        return puissance;
+    }
+
+    /** Vitesse en combat : stages, Écharpe Choix, paralysie, talents météo. */
+    public static double vitesseEnCombat(Pokemon p, Field.Meteo meteo, Field.TypeTerrain terrain) {
+        double v = p.getStatCalculee(Stat.VITESSE);
+        int stage = p.getStage(Stat.VITESSE);
+        if (stage >= 0) v = v * (2.0 + stage) / 2.0;
+        else v = v * 2.0 / (2.0 - stage);
+        if ("Écharpe Choix".equals(p.getObjet())) v *= 1.5;
+        // Talents doublant la vitesse sous leur météo
+        String talent = p.getTalent();
+        boolean soleil = meteo == Field.Meteo.SOLEIL || meteo == Field.Meteo.SOLEIL_INTENSE;
+        boolean pluie = meteo == Field.Meteo.PLUIE || meteo == Field.Meteo.PLUIE_INTENSE;
+        if (("Chlorophylle".equals(talent) && soleil)
+            || ("Glissade".equals(talent) && pluie)
+            || ("Baigne Sable".equals(talent) && meteo == Field.Meteo.SABLE)
+            || ("Chasse-Neige".equals(talent) && meteo == Field.Meteo.NEIGE)) {
+            v *= 2.0;
+        }
+        if (Stat.VITESSE == statLaPlusHaute(p) && estBoostParadox(p, meteo, terrain)) {
+            v *= 1.5;
+        }
+        // Pied Véloce (Quick Feet) : +50% sous n'importe quel statut, et
+        // ignore le malus de paralysie habituel (sinon net une pénalité)
+        boolean piedVeloce = "Pied Véloce".equals(talent) && p.getStatut() != Pokemon.Statut.AUCUN;
+        if (piedVeloce) {
+            v *= 1.5;
+        } else if (p.getStatut() == Pokemon.Statut.PARALYSIE) {
+            v *= 0.5;
+        }
+        return Math.floor(v);
+    }
+
+    // Compatibilité : ancien appel sans terrain (Moteur Quark alors ignoré)
+    public static double vitesseEnCombat(Pokemon p, Field.Meteo meteo) {
+        return vitesseEnCombat(p, meteo, Field.TypeTerrain.AUCUN);
+    }
+
+    /**
+     * Protosynthèse / Moteur Quark : +30% (+50% Vitesse) sur la stat la plus
+     * haute du Pokémon si actif. Actif sous soleil intense (Protosynthèse) ou
+     * terrain électrique (Moteur Quark) uniquement — le cas "activé une fois
+     * via Énergie Booster puis persistant" n'est pas modélisé (nécessiterait
+     * un suivi de consommation d'objet à usage unique, non disponible ici).
+     */
+    private static boolean estBoostParadox(Pokemon p, Field.Meteo meteo, Field.TypeTerrain terrain) {
+        String talent = p.getTalent();
+        if ("Proto-Synthèse".equals(talent)) {
+            return meteo == Field.Meteo.SOLEIL_INTENSE || meteo == Field.Meteo.SOLEIL;
+        }
+        if ("Moteur Quark".equals(talent)) {
+            return terrain == Field.TypeTerrain.ELECTRIQUE;
+        }
+        return false;
+    }
+
+    /** La stat (hors PV) avec la plus haute valeur calculée (avant stages). */
+    private static Stat statLaPlusHaute(Pokemon p) {
+        Stat meilleure = Stat.ATTAQUE;
+        int max = -1;
+        for (Stat s : new Stat[]{Stat.ATTAQUE, Stat.DEFENSE, Stat.ATTAQUE_SPE, Stat.DEFENSE_SPE, Stat.VITESSE}) {
+            int v = p.getStatCalculee(s);
+            if (v > max) {
+                max = v;
+                meilleure = s;
+            }
+        }
+        return meilleure;
+    }
+
+    /** Multiplicateur Protosynthèse/Moteur Quark applicable à une stat donnée (offense/défense). */
+    private static double multiplicateurParadox(Pokemon p, Stat stat, Field terrain) {
+        // Pouls Orichalque (Attaque physique fixe, soleil) / Moteur Hadron
+        // (Attaque Spéciale fixe, terrain électrique) : contrairement à
+        // Protosynthèse/Moteur Quark, ils boostent TOUJOURS la même stat,
+        // pas nécessairement la plus haute du Pokémon. Ratio officiel exact
+        // 5461/4096 (~33,3%), pas un simple +30%.
+        String talent = p.getTalent();
+        boolean soleilActif = terrain.getMeteo() == Field.Meteo.SOLEIL
+            || terrain.getMeteo() == Field.Meteo.SOLEIL_INTENSE;
+        if ("Pouls Orichalque".equals(talent) && stat == Stat.ATTAQUE && soleilActif) {
+            return 5461.0 / 4096.0;
+        }
+        if ("Moteur Hadron".equals(talent) && stat == Stat.ATTAQUE_SPE
+                && terrain.getTerrain() == Field.TypeTerrain.ELECTRIQUE) {
+            return 5461.0 / 4096.0;
+        }
+
+        if (stat != statLaPlusHaute(p)) return 1.0;
+        if (!estBoostParadox(p, terrain.getMeteo(), terrain.getTerrain())) return 1.0;
+        // Ratio officiel exact : 5461/4096 (~33,3%) pour les stats hors
+        // Vitesse, 6144/4096 (1.5 exact) pour la Vitesse.
+        return stat == Stat.VITESSE ? 1.5 : 5461.0 / 4096.0;
+    }
+
+    /** Poids en hectogrammes, modifié par Heavy Metal, Light Metal et Pierrallégée. */
+    private static double poidsEffectif(Pokemon p) {
+        double poids = p.getPoidsHg();
+        if (poids <= 0) return 0;
+        String talent = p.getTalent();
+        if ("Heavy Metal".equals(talent)) poids *= 2.0;
+        if ("Light Metal".equals(talent)) poids *= 0.5;
+        if ("Pierrallégée".equals(p.getObjet())) poids *= 0.5;
+        return Math.max(1, poids);
+    }
+
+    private static double calculerEfficaciteType(Move capacite, Pokemon defenseur, Pokemon attaquant) {
+        if (capacite.getType() == PokemonType.STELLAIRE) {
+            return defenseur.isTeracristallise() ? 2.0 : 1.0;
+        }
+
+        // Ballon : immunise le porteur au Sol tant qu'il le tient (mais pas
+        // contre Mille Flèches, qui ignore explicitement ce genre d'immunité)
+        if (capacite.getType() == PokemonType.SOL
+                && "Ballon".equals(defenseur.getObjet())
+                && !"thousandarrows".equals(capacite.getNom())) {
+            return 0.0;
+        }
+
+        // Lyophilisation (Freeze-Dry) : toujours super efficace contre l'Eau,
+        // même si ce type résiste normalement à la Glace. Le reste du calcul
+        // (double type, résistances additionnelles) suit la table normale.
+        if ("freezedry".equals(capacite.getNom())) {
+            PokemonType t1 = defenseur.getTypeDefenseurEffectif1();
+            PokemonType t2 = defenseur.getTypeDefenseurEffectif2();
+            double eff1 = (t1 == PokemonType.EAU) ? 2.0 : capacite.getType().efficaciteContre(t1);
+            if (t2 == null) return eff1;
+            double eff2 = (t2 == PokemonType.EAU) ? 2.0 : capacite.getType().efficaciteContre(t2);
+            return eff1 * eff2;
+        }
+
+        PokemonType t1 = defenseur.getTypeDefenseurEffectif1();
+        PokemonType t2 = defenseur.getTypeDefenseurEffectif2();
+
+        // Mille Flèches : touche les types Vol comme s'ils n'étaient pas
+        // immunisés au Sol (son effet signature), reste du calcul inchangé
+        if ("thousandarrows".equals(capacite.getNom())) {
+            double eff1 = (t1 == PokemonType.VOL) ? 1.0 : capacite.getType().efficaciteContre(t1);
+            if (t2 == null) return eff1;
+            double eff2 = (t2 == PokemonType.VOL) ? 1.0 : capacite.getType().efficaciteContre(t2);
+            return eff1 * eff2;
+        }
+
+        // Œil Révélateur (Ursaking Lune Vermeille) : les capacités Normal et
+        // Combat de son porteur touchent les Spectre de façon neutre (1.0x),
+        // au lieu de l'immunité totale habituelle. Le reste du calcul (autre
+        // type du défenseur) suit la table normale.
+        boolean oeilRevelateur = "Œil Révélateur".equals(attaquant.getTalent())
+            && (capacite.getType() == PokemonType.NORMAL || capacite.getType() == PokemonType.COMBAT);
+        if (oeilRevelateur) {
+            double eff1 = (t1 == PokemonType.SPECTRE) ? 1.0 : capacite.getType().efficaciteContre(t1);
+            if (t2 == null) return eff1;
+            double eff2 = (t2 == PokemonType.SPECTRE) ? 1.0 : capacite.getType().efficaciteContre(t2);
+            return eff1 * eff2;
+        }
+
+        return capacite.getType().efficaciteContre(t1, t2);
+    }
+
+    private static void appliquerModificateursConditionnels(ModifierContext ctx, double efficacite,
+                                                              Pokemon attaquant, Pokemon defenseur) {
+        if (efficacite > 1.0) {
+            if ("Ceinture Pro".equals(attaquant.getObjet())) {
+                ctx.multiplicateurDegatsFinal *= 1.2;
+            }
+            String talentDef = defenseur.getTalent();
+            if ("Filtre".equals(talentDef) || "Solide Roc".equals(talentDef)) {
+                ctx.multiplicateurDegatsFinal *= 0.75;
+            }
+        } else if (efficacite > 0.0 && efficacite < 1.0) {
+            if ("Verres Teintés".equals(attaquant.getTalent())) {
+                ctx.multiplicateurDegatsFinal *= 2.0;
+            }
+        }
+    }
+
+    private static int calculerStatOffensiveEffective(Pokemon attaquant, Move capacite, ModifierContext ctx,
+                                                        Stat stat, boolean critique) {
+        int base = attaquant.getStatCalculee(stat);
+        int stage = attaquant.getStage(stat);
+
+        if (ctx.ignorerStagesAttaquant) {
+            stage = 0;
+        } else if (critique && stage < 0) {
+            stage = 0;
+        }
+
+        double valeur = appliquerStage(base, stage);
+        valeur *= ctx.multiplicateurAttaque;
+        valeur *= multiplicateurParadox(attaquant, stat, ctx.terrain);
+
+        if (stat == Stat.ATTAQUE && attaquant.getStatut() == Pokemon.Statut.BRULURE && !ctx.ignorerPenaliteBrulure) {
+            valeur *= 0.5;
+        }
+
+        return (int) Math.floor(valeur);
+    }
+
+    private static int calculerStatDefensiveEffective(Pokemon defenseur, Field terrain, ModifierContext ctx,
+                                                        Stat stat, boolean critique) {
+        int base = defenseur.getStatCalculee(stat);
+        int stage = defenseur.getStage(stat);
+
+        if (ctx.ignorerStagesDefenseur) {
+            stage = 0;
+        } else if (critique && stage > 0) {
+            stage = 0;
+        }
+
+        double valeur = appliquerStage(base, stage);
+        valeur *= ctx.multiplicateurDefense;
+        valeur *= multiplicateurParadox(defenseur, stat, terrain);
+
+        if (terrain.getMeteo() == Field.Meteo.SABLE && stat == Stat.DEFENSE_SPE
+            && defenseur.possedeType(PokemonType.ROCHE)) {
+            valeur *= 1.5;
+        }
+        if (terrain.getMeteo() == Field.Meteo.NEIGE && stat == Stat.DEFENSE
+            && defenseur.possedeType(PokemonType.GLACE)) {
+            valeur *= 1.5;
+        }
+
+        return (int) Math.floor(valeur);
+    }
+
+    private static double appliquerStage(int statBase, int stage) {
+        if (stage >= 0) return statBase * (2.0 + stage) / 2.0;
+        return statBase * 2.0 / (2.0 - stage);
+    }
+
+    private static double calculerSTAB(Pokemon attaquant, Move capacite, ModifierContext ctx) {
+        PokemonType typeCapacite = capacite.getType();
+
+        // Protéen / Libéro : l'attaquant prend le type de son attaque → STAB garanti
+        String talent = attaquant.getTalent();
+        boolean proteen = "Protéen".equals(talent) || "Libéro".equals(talent);
+
+        boolean typeOriginal = attaquant.possedeType(typeCapacite) || proteen;
+
+        if (attaquant.isTeracristallise()) {
+            PokemonType tera = attaquant.getTeraType();
+            if (tera != null && typeCapacite == tera) {
+                if (typeOriginal) return ctx.stabAugmente ? 2.25 : 2.0;
+                return ctx.stabAugmente ? 2.0 : 1.5;
+            }
+            if (typeOriginal) return ctx.stabAugmente ? 2.0 : 1.5;
+            return 1.0;
+        }
+
+        if (typeOriginal) return ctx.stabAugmente ? 2.0 : 1.5;
+        return 1.0;
+    }
+
+    private static boolean estAuSol(Pokemon p) {
+        if (p.possedeType(PokemonType.VOL)) return false;
+        if ("Lévitation".equals(p.getTalent())) return false;
+        return !"Ballon".equals(p.getObjet());
+    }
+
+    /**
+     * Multiplicateur défensif du terrain : dépend du sol du DÉFENSEUR,
+     * pas de l'attaquant (contrairement au boost de type Élec/Herbu/Psy).
+     * Champ Brumeux : Dragon x0.5. Champ Herbu : Séisme/Ébranlement/Amplitude x0.5.
+     */
+    private static double multiplicateurTerrainDefensif(Field terrain, Move capacite, Pokemon defenseur) {
+        if (!estAuSol(defenseur)) return 1.0;
+        if (terrain.getTerrain() == Field.TypeTerrain.BRUMEUX
+            && capacite.getType() == PokemonType.DRAGON) {
+            return 0.5;
+        }
+        if (terrain.getTerrain() == Field.TypeTerrain.HERBU) {
+            String nom = capacite.getNom();
+            if ("earthquake".equals(nom) || "bulldoze".equals(nom) || "magnitude".equals(nom)) {
+                return 0.5;
+            }
+        }
+        return 1.0;
+    }
+}

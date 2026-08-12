@@ -1,0 +1,937 @@
+package com.tropimon.randompvp.battle;
+
+import com.cobblemon.mod.common.api.moves.MoveTemplate;
+import com.cobblemon.mod.common.api.moves.Moves;
+import com.cobblemon.mod.common.pokemon.Species;
+import com.tropimon.randompvp.calc.DamageCalculator;
+import com.tropimon.randompvp.calc.Field;
+import com.tropimon.randompvp.calc.Move;
+import com.tropimon.randompvp.calc.Nature;
+import com.tropimon.randompvp.calc.Pokemon;
+import com.tropimon.randompvp.calc.PokemonType;
+import com.tropimon.randompvp.calc.ProfilAdversaire;
+import com.tropimon.randompvp.calc.ShowdownIdMapper;
+import com.tropimon.randompvp.calc.SmogonDataLoader;
+import com.tropimon.randompvp.calc.Stat;
+import com.tropimon.randompvp.calc.StatHypothesis;
+import net.minecraft.client.MinecraftClient;
+
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.HashSet;
+import java.util.LinkedHashSet;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+
+public final class ObservationCollector {
+
+    private ObservationCollector() {
+    }
+
+    private static final Map<String, ProfilAdversaire> PROFILS = new HashMap<>();
+    private static final Map<String, LinkedHashSet<String>> COUPS_ADVERSAIRE = new HashMap<>();
+
+    // PP consommés par l'adversaire : espèce -> (id capacité -> PP utilisés)
+    private static final Map<String, Map<String, Integer>> PP_UTILISES = new HashMap<>();
+    private static final Set<String> OBJETS_RETIRES = new HashSet<>();
+
+    // Objets confirmés par observation (ex: soin de fin de tour ~1/16 => Restes)
+    private static final Map<String, String> OBJETS_CONFIRMES = new HashMap<>();
+    private static String coupAdversaireTourPrecedent = null;
+
+    // Capacités qui soignent leur utilisateur : excluent la confirmation de Restes
+    private static final Set<String> COUPS_SOIN_OU_DRAIN = Set.of(
+        "recover", "roost", "softboiled", "slackoff", "milkdrink", "moonlight",
+        "morningsun", "synthesis", "shoreup", "rest", "wish", "healorder",
+        "strengthsap", "junglehealing", "lifedew", "floralhealing",
+        "absorb", "megadrain", "gigadrain", "leechlife", "drainpunch",
+        "hornleech", "drainingkiss", "paraboliccharge", "oblivionwing",
+        "dreameater", "bitterblade", "leechseed", "painsplit");
+    // Vitesse minimale observée par espèce (déduite de l'ordre d'action)
+    private static final Map<String, Integer> VITESSES_MIN_OBSERVEES = new HashMap<>();
+    private static final double TOLERANCE_POURCENT = 3.0;
+
+    // Coups à priorité augmentée : l'ordre d'action ne reflète pas la vitesse
+    private static final Set<String> COUPS_PRIORITAIRES = Set.of(
+        "quickattack", "extremespeed", "aquajet", "bulletpunch", "machpunch",
+        "iceshard", "shadowsneak", "suckerpunch", "accelerock", "vacuumwave",
+        "jetpunch", "grassyglide", "firstimpression", "fakeout", "feint",
+        "thunderclap", "upperhand", "protect", "detect",
+        "banefulbunker", "silktrap", "burningbulwark", "spikyshield", "kingsshield",
+        "obstruct", "endure", "trickroom"
+    );
+
+    private static double pvJoueurDebutTour = -1;
+    private static double pvAdversaireDebutTour = -1;
+    private static MoveUseTracker.CoupDetecte coupJoueurDuTour = null;
+    private static MoveUseTracker.CoupDetecte coupAdversaireDuTour = null;
+    private static Boolean adversaireAAgiEnPremier = null;
+    private static String espaceAdversaireDuTour = null;
+
+    public static synchronized void signalerNouveauTour() {
+        Pokemon joueur = BattleStateTracker.getJoueurActifDepuisEquipe();
+        if (joueur == null) joueur = BattleStateTracker.getJoueurActif();
+        Pokemon adversaire = BattleStateTracker.getAdversaireActif();
+        if (joueur == null || adversaire == null) return;
+
+        double pvJoueurMaintenant = joueur.getPourcentagePv();
+        double pvAdversaireMaintenant = adversaire.getPourcentagePv();
+
+        // La Vampigraine et la Salaison ne survivent pas au switch du joueur
+        if (especeJoueurSuivie != null && !especeJoueurSuivie.equals(joueur.getEspece())) {
+            joueurVampigraine = false;
+            joueurSalaison = false;
+            compteurToxikJoueur = 0;
+        }
+        especeJoueurSuivie = joueur.getEspece();
+
+        // Idem côté adverse (espaceAdversaireDuTour contient encore l'espèce du tour passé)
+        if (espaceAdversaireDuTour != null && !espaceAdversaireDuTour.equals(adversaire.getEspece())) {
+            adversaireVampigraine = false;
+            adversaireSalaison = false;
+            compteurToxikAdversaire = 0;
+            coupVerrouAdversaire = null;   // le verrou Choix tombe au switch
+            compteurAbrisAdversaire = 0;
+        }
+
+        // Abris consécutifs de l'adversaire (le 2e n'a que ~33% de réussite)
+        if (coupAdversaireDuTour != null) {
+            if (COUPS_PROTECTION.contains(coupAdversaireDuTour.showdownId())) {
+                compteurAbrisAdversaire++;
+            } else {
+                compteurAbrisAdversaire = 0;
+            }
+        }
+
+        FieldTracker.nouveauTour();
+
+        // Compteurs Toxik : +1 par tour passé empoisonné gravement (reset au switch/soin)
+        if (joueur.getStatut() == Pokemon.Statut.POISON_GRAVE) compteurToxikJoueur++;
+        else compteurToxikJoueur = 0;
+        if (adversaire.getStatut() == Pokemon.Statut.POISON_GRAVE) compteurToxikAdversaire++;
+        else compteurToxikAdversaire = 0;
+
+        if (pvJoueurDebutTour >= 0 && pvAdversaireDebutTour >= 0) {
+            double perteJoueur = pvJoueurDebutTour - pvJoueurMaintenant;
+            double perteAdversaire = pvAdversaireDebutTour - pvAdversaireMaintenant;
+
+            if (perteAdversaire < -5.0 || perteJoueur < -5.0) {
+                // Soin adverse de ~1/16 sans switch ni capacité de soin : Restes confirmés
+                // (Vampigraine/Vœu soignent 1/8+ et le tour d'après pour Vœu : exclus)
+                if (perteAdversaire <= -5.0 && perteAdversaire >= -8.0
+                        && adversaire.getEspece().equals(espaceAdversaireDuTour)
+                        && !OBJETS_RETIRES.contains(adversaire.getEspece())
+                        && (coupAdversaireDuTour == null
+                            || !COUPS_SOIN_OU_DRAIN.contains(coupAdversaireDuTour.showdownId()))
+                        && !"wish".equals(coupAdversaireTourPrecedent)
+                        && FieldTracker.construireField().getTerrain() != Field.TypeTerrain.HERBU) {
+                    OBJETS_CONFIRMES.put(adversaire.getEspece(), "Restes");
+                }
+                if (coupAdversaireDuTour != null) {
+                    coupAdversaireTourPrecedent = coupAdversaireDuTour.showdownId();
+                }
+                pvJoueurDebutTour = pvJoueurMaintenant;
+                pvAdversaireDebutTour = pvAdversaireMaintenant;
+                espaceAdversaireDuTour = adversaire.getEspece();
+                coupJoueurDuTour = null;
+                coupAdversaireDuTour = null;
+                adversaireAAgiEnPremier = null;
+                return;
+            }
+
+            if (coupJoueurDuTour != null && "knockoff".equals(coupJoueurDuTour.showdownId())
+                    && perteAdversaire >= 0.5
+                    && !"Glu".equals(adversaire.getTalent())) {
+                OBJETS_RETIRES.add(adversaire.getEspece());
+            }
+
+            // Détection Casque Brut : tour "propre" où le joueur attaque au contact,
+            // l'adversaire ne l'attaque pas, et le joueur perd des PV quand même.
+            // 12.5% = Épine de Fer/Peau Dure seule | ~17% = Casque Brut | ~29% = les deux
+            if (coupJoueurDuTour != null
+                    && com.tropimon.randompvp.calc.ContactMoves.estContact(coupJoueurDuTour.showdownId())
+                    && perteAdversaire >= 0.5
+                    && perteJoueur >= 14.0 && perteJoueur <= 33.0
+                    && !(perteJoueur > 20.0 && perteJoueur < 25.0)
+                    && adversaireNAPasAttaque()
+                    && joueur.getStatut() == Pokemon.Statut.AUCUN
+                    && !joueurVampigraine
+                    && !"Orbe Vie".equals(joueur.getObjet())
+                    && !OBJETS_RETIRES.contains(adversaire.getEspece())
+                    && (FieldTracker.construireField().getMeteo() != Field.Meteo.SABLE
+                        || immuniseSableSimple(joueur))) {
+                OBJETS_CONFIRMES.put(adversaire.getEspece(), "Casque Brut");
+                // 25-33% = Casque Brut + Épine de Fer/Peau Dure : le talent aussi est un fait
+                if (perteJoueur >= 25.0) {
+                    TALENTS_CHIP_CONFIRMES.add(adversaire.getEspece());
+                }
+            }
+
+            // Inférence de vitesse : l'adversaire a agi en premier avec des coups non prioritaires
+            if (Boolean.TRUE.equals(adversaireAAgiEnPremier)
+                    && coupJoueurDuTour != null && coupAdversaireDuTour != null
+                    && !COUPS_PRIORITAIRES.contains(coupJoueurDuTour.showdownId())
+                    && !COUPS_PRIORITAIRES.contains(coupAdversaireDuTour.showdownId())
+                    && !FieldTracker.isDistorsion()) {
+                int vitesseJoueur = vitesseEffectiveJoueur(joueur);
+                VITESSES_MIN_OBSERVEES.merge(adversaire.getEspece(), vitesseJoueur + 1, Math::max);
+            }
+
+            if (coupAdversaireDuTour != null && perteJoueur >= 0.5) {
+                enregistrerObservation(true, perteJoueur, adversaire, joueur, coupAdversaireDuTour);
+            }
+            if (coupJoueurDuTour != null && perteAdversaire >= 0.5) {
+                enregistrerObservation(false, perteAdversaire, adversaire, joueur, coupJoueurDuTour);
+            }
+        }
+
+        pvJoueurDebutTour = pvJoueurMaintenant;
+        pvAdversaireDebutTour = pvAdversaireMaintenant;
+        espaceAdversaireDuTour = adversaire.getEspece();
+        if (coupAdversaireDuTour != null) {
+            coupAdversaireTourPrecedent = coupAdversaireDuTour.showdownId();
+        }
+        coupJoueurDuTour = null;
+        coupAdversaireDuTour = null;
+        adversaireAAgiEnPremier = null;
+    }
+
+    public static synchronized void signalerCoupUtilise(MoveUseTracker.CoupDetecte coup) {
+        Boolean estAdversaire = determinerAttaquant(coup.proprietaire());
+
+        // Premier coup du tour = camp qui agit en premier
+        if (adversaireAAgiEnPremier == null && estAdversaire != null) {
+            adversaireAAgiEnPremier = estAdversaire;
+        }
+
+        if (Boolean.TRUE.equals(estAdversaire)) {
+            coupAdversaireDuTour = coup;
+            if ("leechseed".equals(coup.showdownId())) {
+                joueurVampigraine = true;
+            }
+            if ("saltcure".equals(coup.showdownId())) {
+                joueurSalaison = true;
+            }
+            if (coup.proprietaire() != null) {
+                nomAdversaireCourant = coup.proprietaire();
+            }
+            coupVerrouAdversaire = coup.showdownId();
+            Pokemon adversaire = BattleStateTracker.getAdversaireActif();
+            if (adversaire != null) {
+                COUPS_ADVERSAIRE
+                    .computeIfAbsent(adversaire.getEspece(), k -> new LinkedHashSet<>())
+                    .add(coup.showdownId());
+
+                // Comptage des PP : Pression (talent du joueur) ajoute 1 PP,
+                // mais seulement si la capacité CIBLE le Pokémon qui a Pression
+                // (Abri, Soin, Vœu, Piège de Roc etc. ne sont pas affectés)
+                int cout = 1;
+                Pokemon joueurActif = BattleStateTracker.getJoueurActifDepuisEquipe();
+                if (joueurActif == null) joueurActif = BattleStateTracker.getJoueurActif();
+                if (joueurActif != null && "Pression".equals(joueurActif.getTalent())
+                    && cibleLAdversaire(coup.showdownId())) {
+                    cout = 2;
+                }
+                PP_UTILISES
+                    .computeIfAbsent(adversaire.getEspece(), k -> new HashMap<>())
+                    .merge(coup.showdownId(), cout, Integer::sum);
+            }
+        } else {
+            coupJoueurDuTour = coup;
+            if ("leechseed".equals(coup.showdownId())) {
+                adversaireVampigraine = true;
+            }
+            if ("saltcure".equals(coup.showdownId())) {
+                adversaireSalaison = true;
+            }
+        }
+    }
+
+    private static int vitesseEffectiveJoueur(Pokemon joueur) {
+        double v = joueur.getStatCalculee(Stat.VITESSE);
+        int stage = BoostTracker.getStageJoueur(Stat.VITESSE);
+        if (stage >= 0) v = v * (2.0 + stage) / 2.0;
+        else v = v * 2.0 / (2.0 - stage);
+        if ("Écharpe Choix".equals(joueur.getObjet())) v *= 1.5;
+        if (joueur.getStatut() == Pokemon.Statut.PARALYSIE) v *= 0.5;
+        return (int) Math.floor(v);
+    }
+
+    /** Vitesse minimale observée pour une espèce adverse (0 si aucune observation). */
+    public static int getVitesseMinObservee(String espece) {
+        return VITESSES_MIN_OBSERVEES.getOrDefault(espece, 0);
+    }
+
+    private static void enregistrerObservation(boolean adversaireEtaitAttaquant, double perte,
+                                                Pokemon adversaire, Pokemon joueur,
+                                                MoveUseTracker.CoupDetecte coup) {
+        MoveTemplate template = Moves.INSTANCE.getByName(coup.showdownId());
+        if (template == null) return;
+        com.tropimon.randompvp.calc.Move capacite = convertirCapacite(template);
+        if (capacite == null || capacite.estCapaciteDeStatut()) return;
+
+        ProfilAdversaire profil = PROFILS.computeIfAbsent(adversaire.getEspece(), k -> {
+            Set<String> talentsReels = getTalentsReelsEspece(adversaire);
+            SmogonDataLoader.SmogonPokemonData smogon = SmogonDataLoader.getDonnees(adversaire.getEspece());
+            return new ProfilAdversaire(talentsReels, smogon);
+        });
+
+        Field terrainNeutre = FieldTracker.construireField();
+        double observeMin = Math.max(0, perte - TOLERANCE_POURCENT);
+        double observeMax = perte + TOLERANCE_POURCENT;
+        profil.enregistrerObservation(adversaireEtaitAttaquant, adversaire, joueur, capacite, terrainNeutre,
+            observeMin, observeMax);
+
+        // --- Détection d'objet par signal fort, distincte du moteur de correction ---
+        // Une seule observation nette suffit : les ratios 1.0 / 1.3 / 1.5 sont assez
+        // séparés pour ne pas se confondre avec le bruit normal des rolls (85-100%).
+        try {
+            detecterObjetOffensifParSignal(adversaireEtaitAttaquant, perte, adversaire, joueur,
+                capacite, template, terrainNeutre);
+        } catch (Exception ignored3) {
+        }
+
+        // Correction directe par écart prévu/réel : s'applique immédiatement
+        // à toutes les lignes du HUD, y compris pour tes autres Pokémon.
+        try {
+            if (!capacite.isMultiCoups()) {
+                Pokemon attaquant = adversaireEtaitAttaquant ? construireAdversaireEstime(adversaire) : joueur;
+                Pokemon defenseur = adversaireEtaitAttaquant ? joueur : construireAdversaireEstime(adversaire);
+
+                // La prédiction de référence doit inclure les STAGES actuels
+                // (Mur de Fer etc.), sinon leur effet est compté deux fois :
+                // une fois par le boost, une fois par la "correction".
+                for (Stat st : Stat.values()) {
+                    if (st == Stat.PV) continue;
+                    int stJoueur = BoostTracker.getStageJoueur(st);
+                    int stAdv = BoostTracker.getStageAdversaire(st);
+                    if (adversaireEtaitAttaquant) {
+                        if (stAdv != 0) attaquant.setStage(st, stAdv);
+                        if (stJoueur != 0) defenseur.setStage(st, stJoueur);
+                    } else {
+                        if (stJoueur != 0) attaquant.setStage(st, stJoueur);
+                        if (stAdv != 0) defenseur.setStage(st, stAdv);
+                    }
+                }
+
+                DamageCalculator.Resultat prevu = DamageCalculator.calculer(
+                    attaquant, defenseur, capacite, terrainNeutre, null, false);
+                double milieuPrevu = (prevu.pourcentageMin + prevu.pourcentageMax) / 2.0;
+
+                // Le delta de PV observé est NET des résiduels du défenseur
+                // (Restes qui soignent, Toxik/Salaison qui rongent) : on les
+                // retire pour isoler les dégâts du coup lui-même.
+                double perteCoup = perte;
+                try {
+                    boolean defEstAdversaire = !adversaireEtaitAttaquant;
+                    boolean talentConf = !defEstAdversaire
+                        || getTalentConfirme(adversaire.getEspece()) != null;
+                    java.util.Set<String> talentsPoss = defEstAdversaire
+                        ? getTalentsReelsEspece(adversaire) : null;
+                    boolean soinIncertain = defEstAdversaire && !talentConf
+                        && talentsPoss != null && talentsPoss.contains("Soin Poison");
+                    com.tropimon.randompvp.calc.ResidualProjector.Projection proj =
+                        com.tropimon.randompvp.calc.ResidualProjector.projeter(
+                            defenseur, terrainNeutre.getMeteo(), true,
+                            defEstAdversaire ? getCompteurToxikProchainAdversaire() : getCompteurToxikProchainJoueur(),
+                            defEstAdversaire ? adversaireSalaison : joueurSalaison,
+                            defEstAdversaire ? adversaireVampigraine : joueurVampigraine,
+                            talentConf, soinIncertain);
+                    if (proj != null) perteCoup = Math.max(0, perte - proj.netPremierTourPct());
+                } catch (Exception ignored2) {
+                }
+
+                // Coup critique probable (réel >> prévu max) : ne rien conclure
+                boolean critProbable = perteCoup > prevu.pourcentageMax * 1.4;
+                if (milieuPrevu > 1.0 && !prevu.immunise && !critProbable) {
+                    double ratio = perteCoup / milieuPrevu;
+                    // Zone morte élargie : un roll bas + un résiduel mal estimé
+                    // ne doivent pas déclencher de correction
+                    if (ratio < 0.75 || ratio > 1.3) {
+                        Stat cible = capacite.getCategorie() == com.tropimon.randompvp.calc.Move.Categorie.PHYSIQUE
+                            ? (adversaireEtaitAttaquant ? Stat.ATTAQUE : Stat.DEFENSE)
+                            : (adversaireEtaitAttaquant ? Stat.ATTAQUE_SPE : Stat.DEFENSE_SPE);
+                        majFacteur(adversaire.getEspece(), cible, ratio);
+                    }
+                }
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    public static Pokemon construireAdversaireEstime(Pokemon adversaireBase) {
+        String espece = adversaireBase.getEspece();
+        ProfilAdversaire profil = PROFILS.get(espece);
+        SmogonDataLoader.SmogonPokemonData smogon = SmogonDataLoader.getDonnees(espece);
+        boolean objetRetire = OBJETS_RETIRES.contains(espece);
+
+        Pokemon.Builder b = Pokemon.builder(espece, adversaireBase.getNiveau(),
+            adversaireBase.getType1(), adversaireBase.getType2());
+        b.poids(adversaireBase.getPoidsHg());
+        for (Stat s : Stat.values()) {
+            b.statBase(s, adversaireBase.getStatBase(s));
+        }
+
+        // Scouting inter-combats : pré-remplir les faits des combats passés
+        ScoutingStore.Faits scout = ScoutingStore.get(nomAdversaireCourant, espece);
+        if (scout != null && !ESPECES_SCOUT_FUSIONNEES.contains(espece)) {
+            ESPECES_SCOUT_FUSIONNEES.add(espece);
+            if (!scout.capacites.isEmpty()) {
+                COUPS_ADVERSAIRE
+                    .computeIfAbsent(espece, k -> new LinkedHashSet<>())
+                    .addAll(scout.capacites);
+            }
+            if (scout.chipTalent) TALENTS_CHIP_CONFIRMES.add(espece);
+        }
+
+        String objetConfirme = OBJETS_CONFIRMES.get(espece);
+
+        // Random battle : les EV et la nature du set Smogon ne s'appliquent PAS
+        // (spreads compétitifs 252/4 avec nature boostante, alors que le format
+        // impose 85 partout et neutre). On ne garde de Smogon que l'objet et le
+        // talent probables, qui eux restent variables en random battle.
+        if (smogon != null) {
+            if (!objetRetire && objetConfirme == null && !smogon.topItemsShowdownId().isEmpty()) {
+                String fr = ShowdownIdMapper.objet(smogon.topItemsShowdownId().get(0));
+                if (fr != null) b.objet(fr);
+            }
+            if (!smogon.topAbilitiesShowdownId().isEmpty()) {
+                String fr = ShowdownIdMapper.talent(smogon.topAbilitiesShowdownId().get(0));
+                if (fr != null) b.talent(fr);
+            }
+        }
+
+        // Une seule observation suffit à corriger : mieux vaut une estimation
+        // calibrée sur le réel qu'un set Smogon démenti par les faits
+        if (profil != null && profil.getNbObservations() >= 3) {
+            // Random battle : aucune inférence d'EV ni de nature — elles sont
+            // connues (85 / neutre). Le moteur de narrowing ne sert plus qu'à
+            // resserrer les candidats objet et talent.
+
+            if (!objetRetire && objetConfirme == null) {
+                String objetEstime = extraireObjetUnique(profil.attaque);
+                if (objetEstime == null) objetEstime = extraireObjetUnique(profil.attaqueSpe);
+                if (objetEstime == null) objetEstime = extraireObjetUnique(profil.defense);
+                if (objetEstime == null) objetEstime = extraireObjetUnique(profil.defenseSpe);
+                if (objetEstime != null) b.objet(objetEstime);
+            }
+
+            String talentEstime = extraireTalentUnique(profil.attaque);
+            if (talentEstime == null) talentEstime = extraireTalentUnique(profil.attaqueSpe);
+            // N'écrase le talent Smogon que si le talent inféré modifie réellement
+            // les dégâts : l'inférence ne peut rien conclure sur les talents neutres
+            // (ex: Épine de Fer écrasé par Anticipation = régression pure)
+            if (talentEstime != null
+                    && com.tropimon.randompvp.calc.AbilityModifier.pour(talentEstime) != null) {
+                b.talent(talentEstime);
+            }
+        }
+
+        // Objet/talent des combats passés : meilleure estimation que Smogon,
+        // mais le "?" reste (le set a pu changer depuis)
+        if (scout != null) {
+            if (scout.objet != null && objetConfirme == null && !objetRetire) b.objet(scout.objet);
+            if (scout.talent != null) b.talent(scout.talent);
+        }
+
+        if (objetConfirme != null && !objetRetire) {
+            b.objet(objetConfirme);
+        }
+
+        String talentConfirme = TALENTS_CONFIRMES.get(espece);
+        if (talentConfirme != null) {
+            b.talent(talentConfirme);
+        }
+
+        if (objetRetire) {
+            b.objet(null);
+        }
+
+        // Correction par observation : DÉSACTIVÉE temporairement — mesure
+        // de bord peu fiable, écrasait des dégâts corrects (retour utilisateur).
+        // Les facteurs continuent d'être calculés (voir majFacteur) mais ne
+        // sont plus appliqués, pour pouvoir diagnostiquer sur des cas concrets
+        // sans que le calcul affiché soit lui-même faussé.
+        boolean CORRECTION_ACTIVE = false;
+        Map<Stat, Double> facteurs = CORRECTION_ACTIVE ? FACTEURS.get(espece) : null;
+        if (facteurs != null && !facteurs.isEmpty()) {
+            for (Map.Entry<Stat, Double> e : facteurs.entrySet()) {
+                double f = e.getValue();
+                if (Math.abs(f - 1.0) < 0.12) continue;   // écart dans le bruit : ignorer
+                Stat st = e.getKey();
+                // Dégâts subis plus forts que prévu => son Attaque est plus haute (x f)
+                // Dégâts infligés plus faibles que prévu => sa Défense est plus haute (/ f)
+                boolean offensive = (st == Stat.ATTAQUE || st == Stat.ATTAQUE_SPE);
+                double mult = offensive ? f : 1.0 / f;
+                b.multiplicateurStat(st, mult);
+            }
+        }
+
+        // Dernier mot sur les stats : 31 IV / 85 EV / nature neutre, quoi qu'il
+        // se soit passé au-dessus. Le niveau, lui, vient de adversaireBase et
+        // reste celui lu en combat.
+        com.tropimon.randompvp.calc.RandomBattleFormat.appliquer(b);
+
+        Pokemon p = b.build();
+
+        double fractionPv = adversaireBase.getPvMax() > 0
+            ? (double) adversaireBase.getPvActuels() / adversaireBase.getPvMax() : 1.0;
+        p.setPvActuels((int) Math.round(fractionPv * p.getPvMax()));
+        p.setStatut(adversaireBase.getStatut());
+
+        for (Stat s : Stat.values()) {
+            if (s != Stat.PV) {
+                p.setStage(s, adversaireBase.getStage(s));
+            }
+        }
+
+        return p;
+    }
+
+    // appliquerHypothese/trouverNatureBoostant supprimés : en random battle les
+    // EV et la nature sont connus, il n'y a plus d'hypothèse de stat à appliquer.
+
+    private static String extraireObjetUnique(StatHypothesis hyp) {
+        Set<String> s = new HashSet<>(hyp.objetsPossibles);
+        s.remove(StatHypothesis.AUCUN);
+        return s.size() == 1 ? s.iterator().next() : null;
+    }
+
+    private static String extraireTalentUnique(StatHypothesis hyp) {
+        Set<String> s = new HashSet<>(hyp.talentsPossibles);
+        s.remove(StatHypothesis.AUCUN);
+        return s.size() == 1 ? s.iterator().next() : null;
+    }
+
+    public static List<MoveTemplate> getCoupsAdversaireReveles(String espece) {
+        LinkedHashSet<String> ids = COUPS_ADVERSAIRE.get(espece);
+        if (ids == null) return List.of();
+        List<MoveTemplate> r = new ArrayList<>();
+        for (String id : ids) {
+            MoveTemplate t = Moves.INSTANCE.getByName(id);
+            if (t != null) r.add(t);
+        }
+        return r;
+    }
+
+    // Plancher de PV adverses depuis le dernier point bas (détection de soin intra-tour)
+    private static String especePlancherAdv = null;
+    private static double pvPlancherAdv = -1;
+
+    public static void tick() {
+        if (!BattleStateTracker.estEnCombat()) {
+            reinitialiser();
+            return;
+        }
+
+        // Détection Restes : les PV adverses remontent de ~1/16 depuis leur point bas.
+        // Contrairement au delta net par tour, ceci voit le soin même si le joueur
+        // a infligé des dégâts le même tour.
+        Pokemon adv = BattleStateTracker.getAdversaireActif();
+        if (adv == null) return;
+        double pvNow = adv.getPourcentagePv();
+
+        if (!adv.getEspece().equals(especePlancherAdv)) {
+            especePlancherAdv = adv.getEspece();
+            pvPlancherAdv = pvNow;
+            return;
+        }
+        if (pvNow < pvPlancherAdv) {
+            pvPlancherAdv = pvNow;
+            return;
+        }
+
+        ADVERSAIRES_VUS.put(adv.getEspece(),
+            new double[]{adv.getPourcentagePv(), adv.getStatut().ordinal()});
+
+        double remontee = pvNow - pvPlancherAdv;
+        if (remontee >= 4.5 && remontee <= 8.0
+                && adv.getStatut() != Pokemon.Statut.POISON
+                && adv.getStatut() != Pokemon.Statut.POISON_GRAVE
+                && !OBJETS_RETIRES.contains(adv.getEspece())
+                && (coupAdversaireDuTour == null
+                    || !COUPS_SOIN_OU_DRAIN.contains(coupAdversaireDuTour.showdownId()))
+                && !"wish".equals(coupAdversaireTourPrecedent)
+                && FieldTracker.construireField().getTerrain() != Field.TypeTerrain.HERBU) {
+            OBJETS_CONFIRMES.put(adv.getEspece(), "Restes");
+            pvPlancherAdv = pvNow;
+        } else if (remontee >= 1.5 && pvNow >= 99.5
+                && adv.getStatut() == Pokemon.Statut.AUCUN
+                && !OBJETS_RETIRES.contains(adv.getEspece())
+                && (coupAdversaireDuTour == null
+                    || !COUPS_SOIN_OU_DRAIN.contains(coupAdversaireDuTour.showdownId()))
+                && !"wish".equals(coupAdversaireTourPrecedent)
+                && FieldTracker.construireField().getTerrain() != Field.TypeTerrain.HERBU) {
+            // Soin plafonné par les PV max (ex: Restes à 97% ne rendent que 3%) :
+            // une petite remontée qui termine pile à 100% sans capacité de soin
+            // ne s'explique que par un objet de soin passif
+            OBJETS_CONFIRMES.put(adv.getEspece(), "Restes");
+            pvPlancherAdv = pvNow;
+        } else if (remontee >= 10.5 && remontee <= 14.0
+                && (adv.getStatut() == Pokemon.Statut.POISON
+                    || adv.getStatut() == Pokemon.Statut.POISON_GRAVE)
+                && !joueurVampigraine
+                && (coupAdversaireDuTour == null
+                    || !COUPS_SOIN_OU_DRAIN.contains(coupAdversaireDuTour.showdownId()))
+                && !"wish".equals(coupAdversaireTourPrecedent)
+                && FieldTracker.construireField().getTerrain() != Field.TypeTerrain.HERBU) {
+            // Un Pokémon EMPOISONNÉ qui gagne ~1/8 par tour : signature de Soin Poison
+            // (le poison aurait dû lui retirer des PV, il en gagne 12.5%)
+            TALENTS_CONFIRMES.put(adv.getEspece(), "Soin Poison");
+            pvPlancherAdv = pvNow;
+        } else if (remontee > 8.0) {
+            // Gros soin (Vœu, Soin, drain...) : repartir de ce niveau
+            pvPlancherAdv = pvNow;
+        }
+    }
+
+    private static Boolean determinerAttaquant(String proprietaire) {
+        if (proprietaire == null) return null;
+        var joueurMc = MinecraftClient.getInstance().player;
+        if (joueurMc == null) return null;
+        return !proprietaire.equalsIgnoreCase(joueurMc.getGameProfile().getName());
+    }
+
+    public static ProfilAdversaire getProfil(String espece) { return PROFILS.get(espece); }
+    public static String getEspaceAdversaireCourant() { return espaceAdversaireDuTour; }
+
+    /** PP consommés par cette espèce adverse sur cette capacité (0 si jamais vue). */
+    public static int getPpUtilises(String espece, String moveId) {
+        Map<String, Integer> m = PP_UTILISES.get(espece);
+        return m == null ? 0 : m.getOrDefault(moveId, 0);
+    }
+
+    /**
+     * Vrai si la capacité cible un Pokémon adverse (condition d'application de Pression).
+     * Faux pour les cibles soi-même, alliés, côté de terrain, ou terrain entier.
+     */
+    private static boolean cibleLAdversaire(String moveId) {
+        MoveTemplate t = Moves.INSTANCE.getByName(moveId);
+        if (t == null) return true; // inconnue : on suppose offensive
+        String cible = String.valueOf(t.getTarget()).toLowerCase();
+        if (cible.equals("all")) return false;          // météo, Champ Psychique...
+        if (cible.contains("self")) return false;       // Abri, Soin, Danse Lames...
+        if (cible.contains("ally") || cible.contains("allies")) return false;
+        if (cible.contains("side")) return false;       // Piège de Roc, Picots, écrans...
+        return true;
+    }
+
+    /** Objet confirmé par observation pour cette espèce, ou null. */
+    public static String getObjetConfirme(String espece) {
+        return OBJETS_CONFIRMES.get(espece);
+    }
+
+    // Facteurs de correction observés par espèce et par stat défensive/offensive :
+    // ratio dégâts réels / dégâts prévus. > 1 = la cible encaisse moins que prévu.
+    private static final Map<String, Map<Stat, Double>> FACTEURS = new HashMap<>();
+
+    /** Vrai si un facteur mesuré significatif est actif pour cette stat. */
+    private static boolean facteurActif(String espece, Stat stat) {
+        return Math.abs(getFacteur(espece, stat) - 1.0) >= 0.12;
+    }
+
+    /** Facteur de correction observé pour cette espèce et cette stat (1.0 = aucun). */
+    public static double getFacteur(String espece, Stat stat) {
+        Map<Stat, Double> m = FACTEURS.get(espece);
+        if (m == null) return 1.0;
+        Double f = m.get(stat);
+        return f == null ? 1.0 : f;
+    }
+
+    /**
+     * Corrige le facteur d'une stat à partir d'un écart prévu/réel.
+     * Moyenne glissante pondérée : un écart isolé ne bascule pas tout,
+     * mais deux observations concordantes convergent vite.
+     */
+    private static void majFacteur(String espece, Stat stat, double ratio) {
+        if (!(ratio > 0.05) || !(ratio < 20)) return;   // aberrant : ignorer
+        Map<Stat, Double> m = FACTEURS.computeIfAbsent(espece, k -> new HashMap<>());
+        Double actuel = m.get(stat);
+        m.put(stat, actuel == null ? ratio : actuel * 0.4 + ratio * 0.6);
+    }
+
+    /** Vrai si l'objet de cette espèce est un fait observé (soin vu, ou retiré par Sabotage). */
+    public static boolean estObjetConfirme(String espece) {
+        return OBJETS_CONFIRMES.containsKey(espece) || OBJETS_RETIRES.contains(espece);
+    }
+
+    /**
+     * Confirmation DIRECTE d'un talent par message explicite du jeu
+     * ("cobblemon.battle.ability.generic"), bien plus fiable que les
+     * heuristiques par seuils de dégâts. Ne concerne que l'adversaire
+     * (le talent du joueur est déjà connu avec certitude).
+     */
+    public static void confirmerTalentParMessage(String proprietaire, String talentAnglais) {
+        try {
+            Boolean estAdversaire = determinerAttaquant(proprietaire);
+            if (!Boolean.TRUE.equals(estAdversaire)) return;
+            Pokemon adversaire = BattleStateTracker.getAdversaireActif();
+            if (adversaire == null) return;
+            String talentFr = ShowdownIdMapper.talent(talentAnglais);
+            if (talentFr != null) {
+                TALENTS_CONFIRMES.put(adversaire.getEspece(), talentFr);
+                if ("Épine de Fer".equals(talentFr) || "Peau Dure".equals(talentFr)) {
+                    TALENTS_CHIP_CONFIRMES.add(adversaire.getEspece());
+                }
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    /**
+     * Confirmation DIRECTE d'un objet par message explicite du jeu, avec
+     * l'id showdown déjà connu (ex: "rockyhelmet" tiré de la clé du message
+     * "cobblemon.battle.damage.rockyhelmet"). Ne concerne que l'adversaire.
+     */
+    public static void confirmerObjetParMessage(String proprietaire, String objetShowdownId) {
+        try {
+            Boolean estAdversaire = determinerAttaquant(proprietaire);
+            if (!Boolean.TRUE.equals(estAdversaire)) return;
+            Pokemon adversaire = BattleStateTracker.getAdversaireActif();
+            if (adversaire == null) return;
+            String objetFr = ShowdownIdMapper.objet(objetShowdownId);
+            if (objetFr != null) OBJETS_CONFIRMES.put(adversaire.getEspece(), objetFr);
+        } catch (Exception ignored) {
+        }
+    }
+
+    /**
+     * Confirmation DIRECTE d'un objet dont le nom arrive en anglais espacé
+     * ("Black Sludge", "Leftovers") plutôt qu'en id showdown - la
+     * normalisation du mapper gère déjà espaces/majuscules donc le lookup
+     * fonctionne directement. Ne concerne que l'adversaire.
+     */
+    public static void confirmerObjetParMessageNomAnglais(String proprietaire, String objetAnglaisEspace) {
+        confirmerObjetParMessage(proprietaire, objetAnglaisEspace);
+    }
+
+    // Espèces dont le talent à chip de contact (Épine de Fer / Peau Dure) est observé
+    private static final Set<String> TALENTS_CHIP_CONFIRMES = new HashSet<>();
+
+    // Talents confirmés par observation (ex: Soin Poison vu en action)
+    private static final Map<String, String> TALENTS_CONFIRMES = new HashMap<>();
+
+    public static String getTalentConfirme(String espece) {
+        return TALENTS_CONFIRMES.get(espece);
+    }
+
+    /** Vrai si un talent type Épine de Fer / Peau Dure a été observé sur cette espèce. */
+    public static boolean aChipTalentConfirme(String espece) {
+        return TALENTS_CHIP_CONFIRMES.contains(espece);
+    }
+
+    // Vampigraine posée sur le Pokémon actif du joueur (fausse la détection de chip)
+    private static boolean joueurVampigraine = false;
+    private static String especeJoueurSuivie = null;
+
+    // Adversaires vus ce combat : espèce -> {pv%, ordinal statut}, ordre d'apparition
+    private static final Map<String, double[]> ADVERSAIRES_VUS = new LinkedHashMap<>();
+
+    /** Vue ordonnée (espèce -> {pv%, ordinal Statut}) des Pokémon adverses aperçus. */
+    public static Map<String, double[]> getAdversairesVus() {
+        return ADVERSAIRES_VUS;
+    }
+
+    // Scouting inter-combats et états stratégiques
+    private static String nomAdversaireCourant = null;
+    private static String coupVerrouAdversaire = null;   // dernier coup depuis son entrée
+    private static int compteurAbrisAdversaire = 0;      // Abris consécutifs
+    private static final Set<String> ESPECES_SCOUT_FUSIONNEES = new HashSet<>();
+    private static final Set<String> COUPS_PROTECTION = Set.of(
+        "protect", "detect", "banefulbunker", "spikyshield", "silktrap",
+        "burningbulwark", "kingsshield", "obstruct", "maxguard");
+
+    public static String getNomAdversaireCourant() { return nomAdversaireCourant; }
+    public static String getCoupVerrouAdversaire() { return coupVerrouAdversaire; }
+    public static int getCompteurAbrisAdversaire() { return compteurAbrisAdversaire; }
+
+    // Volatils et compteurs pour la projection résiduelle des deux camps
+    private static boolean joueurSalaison = false;
+    private static boolean adversaireSalaison = false;
+    private static boolean adversaireVampigraine = false;
+    private static int compteurToxikJoueur = 0;
+    private static int compteurToxikAdversaire = 0;
+
+    public static boolean isJoueurSalaison() { return joueurSalaison; }
+    public static boolean isJoueurVampigraine() { return joueurVampigraine; }
+    public static boolean isAdversaireSalaison() { return adversaireSalaison; }
+    public static boolean isAdversaireVampigraine() { return adversaireVampigraine; }
+    /** Multiplicateur Toxik du PROCHAIN tour pour le joueur (1 si pas encore subi). */
+    public static int getCompteurToxikProchainJoueur() { return compteurToxikJoueur + 1; }
+    public static int getCompteurToxikProchainAdversaire() { return compteurToxikAdversaire + 1; }
+
+    /** L'adversaire n'a pas attaqué ce tour (aucun coup, ou un coup de statut). */
+    /**
+     * Confirme Écharpe/Mouchoir Choix, Bandeau/Lunettes Choix ou Orbe Vie par
+     * un signal fort et net — indépendant du moteur de correction (désactivé).
+     */
+    private static void detecterObjetOffensifParSignal(boolean adversaireEtaitAttaquant, double perte,
+                                                        Pokemon adversaire, Pokemon joueur,
+                                                        com.tropimon.randompvp.calc.Move capacite,
+                                                        MoveTemplate template, Field terrainNeutre) {
+        String espece = adversaire.getEspece();
+        if (OBJETS_CONFIRMES.containsKey(espece)) return;   // déjà un fait connu, rien à chercher
+        if (capacite.isMultiCoups()) return;                 // trop de variance
+        if (!"physical".equalsIgnoreCase(String.valueOf(template.getDamageCategory().getName()))
+            && !"special".equalsIgnoreCase(String.valueOf(template.getDamageCategory().getName()))) return;
+
+        // --- 1. Écharpe/Mouchoir Choix : l'adversaire agit avant alors que
+        //     sa vitesse MAX possible (sans objet) ne le permettrait pas ---
+        if (adversaireEtaitAttaquant && Boolean.TRUE.equals(adversaireAAgiEnPremier)
+                && joueur.getStatut() != Pokemon.Statut.PARALYSIE
+                && adversaire.getStatut() != Pokemon.Statut.PARALYSIE
+                && !FieldTracker.isDistorsion()) {
+            int vitesseMaxSansObjet = (int) Math.floor(
+                ((2 * adversaire.getStatBase(Stat.VITESSE) + 31 + 63) * adversaire.getNiveau()) / 100.0 + 5) * 11 / 10;
+            int vitesseJoueurReelle = joueur.getStatCalculee(Stat.VITESSE);
+            int stageJoueur = joueur.getStage(Stat.VITESSE);
+            double mult = stageJoueur >= 0 ? (2.0 + stageJoueur) / 2.0 : 2.0 / (2.0 - stageJoueur);
+            vitesseJoueurReelle = (int) (vitesseJoueurReelle * mult);
+            if (vitesseMaxSansObjet < vitesseJoueurReelle) {
+                OBJETS_CONFIRMES.put(espece, "Écharpe Choix");
+            }
+            return;
+        }
+
+        // Pour le reste (dégâts), seuls les coups de l'ADVERSAIRE nous renseignent
+        // sur SON objet offensif
+        if (!adversaireEtaitAttaquant) return;
+
+        // Prédiction de référence SANS objet (le set estimé peut déjà en supposer un)
+        Pokemon attaquantSansObjet = construireAdversaireEstime(adversaire);
+        attaquantSansObjet.setObjet(null);
+        DamageCalculator.Resultat sansObjet = DamageCalculator.calculer(
+            attaquantSansObjet, joueur, capacite, terrainNeutre, null, false);
+        if (sansObjet.immunise) return;
+        double milieuSansObjet = (sansObjet.pourcentageMin + sansObjet.pourcentageMax) / 2.0;
+        if (milieuSansObjet < 2.0) return;   // trop petit pour être fiable
+
+        double perteCoup = perte;
+        try {
+            com.tropimon.randompvp.calc.ResidualProjector.Projection proj =
+                com.tropimon.randompvp.calc.ResidualProjector.projeter(
+                    joueur, terrainNeutre.getMeteo(), true,
+                    getCompteurToxikProchainJoueur(), joueurSalaison, joueurVampigraine,
+                    true, false);
+            if (proj != null) perteCoup = Math.max(0, perte - proj.netPremierTourPct());
+        } catch (Exception ignored) {
+        }
+
+        boolean critProbable = perteCoup > sansObjet.pourcentageMax * 1.65;
+        if (critProbable) return;   // coup critique probable : rien à conclure
+
+        double ratio = perteCoup / milieuSansObjet;
+
+        // --- 2. Bandeau/Lunettes Choix : ratio net proche de x1.5 ---
+        if (ratio >= 1.4 && ratio <= 1.65) {
+            String objet = capacite.getCategorie() == com.tropimon.randompvp.calc.Move.Categorie.PHYSIQUE
+                ? "Bandeau Choix" : "Lunettes Choix";
+            OBJETS_CONFIRMES.put(espece, objet);
+            return;
+        }
+
+        // --- 3. Orbe Vie : ratio net proche de x1.3 ET l'attaquant perd bien
+        //     ~10% de ses PV max sur ce même tour (le recul de l'Orbe Vie).
+        //     Exclu si le joueur a aussi attaqué ce tour (ambiguïté : le recul
+        //     pourrait être une riposte plutôt que l'Orbe Vie). ---
+        if (ratio >= 1.2 && ratio < 1.4 && coupJoueurDuTour == null && pvAdversaireDebutTour >= 0) {
+            double recul = pvAdversaireDebutTour - adversaire.getPourcentagePv();
+            if (recul >= 7.0 && recul <= 13.0) {
+                OBJETS_CONFIRMES.put(espece, "Orbe Vie");
+            }
+        }
+    }
+
+    private static boolean adversaireNAPasAttaque() {
+        if (coupAdversaireDuTour == null) return true;
+        MoveTemplate t = Moves.INSTANCE.getByName(coupAdversaireDuTour.showdownId());
+        return t != null && "status".equalsIgnoreCase(String.valueOf(t.getDamageCategory().getName()));
+    }
+
+    private static boolean immuniseSableSimple(Pokemon p) {
+        return p.getType1() == com.tropimon.randompvp.calc.PokemonType.ROCHE
+            || p.getType1() == com.tropimon.randompvp.calc.PokemonType.SOL
+            || p.getType1() == com.tropimon.randompvp.calc.PokemonType.ACIER
+            || p.getType2() == com.tropimon.randompvp.calc.PokemonType.ROCHE
+            || p.getType2() == com.tropimon.randompvp.calc.PokemonType.SOL
+            || p.getType2() == com.tropimon.randompvp.calc.PokemonType.ACIER;
+    }
+
+    public static void reinitialiser() {
+        // Persister les faits du combat avant de tout effacer
+        if (nomAdversaireCourant != null) {
+            Set<String> especes = new HashSet<>();
+            especes.addAll(OBJETS_CONFIRMES.keySet());
+            especes.addAll(TALENTS_CONFIRMES.keySet());
+            especes.addAll(TALENTS_CHIP_CONFIRMES);
+            especes.addAll(COUPS_ADVERSAIRE.keySet());
+            for (String esp : especes) {
+                ScoutingStore.enregistrer(nomAdversaireCourant, esp,
+                    OBJETS_CONFIRMES.get(esp),
+                    TALENTS_CONFIRMES.get(esp),
+                    TALENTS_CHIP_CONFIRMES.contains(esp),
+                    COUPS_ADVERSAIRE.get(esp));
+            }
+            nomAdversaireCourant = null;
+        }
+        coupVerrouAdversaire = null;
+        compteurAbrisAdversaire = 0;
+        ESPECES_SCOUT_FUSIONNEES.clear();
+        ADVERSAIRES_VUS.clear();
+        FACTEURS.clear();
+        PROFILS.clear();
+        COUPS_ADVERSAIRE.clear();
+        PP_UTILISES.clear();
+        OBJETS_CONFIRMES.clear();
+        TALENTS_CHIP_CONFIRMES.clear();
+        TALENTS_CONFIRMES.clear();
+        coupAdversaireTourPrecedent = null;
+        joueurVampigraine = false;
+        joueurSalaison = false;
+        adversaireVampigraine = false;
+        adversaireSalaison = false;
+        compteurToxikJoueur = 0;
+        compteurToxikAdversaire = 0;
+        especeJoueurSuivie = null;
+        OBJETS_RETIRES.clear();
+        VITESSES_MIN_OBSERVEES.clear();
+        BoostTracker.reinitialiser();
+        TypeTracker.reinitialiser();
+        FieldTracker.reinitialiser();
+        pvJoueurDebutTour = -1;
+        pvAdversaireDebutTour = -1;
+        coupJoueurDuTour = null;
+        coupAdversaireDuTour = null;
+        adversaireAAgiEnPremier = null;
+        espaceAdversaireDuTour = null;
+    }
+
+    public static Set<String> getTalentsReelsEspece(Pokemon adversaire) {
+        Species espece = com.cobblemon.mod.common.api.pokemon.PokemonSpecies.INSTANCE.getByName(adversaire.getEspece());
+        if (espece == null) return null;
+        Set<String> r = new HashSet<>();
+        for (var p : espece.getAbilities()) {
+            String fr = ShowdownIdMapper.talent(p.getTemplate().getName());
+            if (fr != null) r.add(fr);
+        }
+        return r;
+    }
+
+    private static com.tropimon.randompvp.calc.Move convertirCapacite(MoveTemplate template) {
+        PokemonType type = ShowdownIdMapper.type(template.getElementalType().getName());
+        if (type == null) return null;
+        String cat = template.getDamageCategory().getName();
+        com.tropimon.randompvp.calc.Move.Categorie categorie;
+        if ("physical".equalsIgnoreCase(cat)) categorie = com.tropimon.randompvp.calc.Move.Categorie.PHYSIQUE;
+        else if ("special".equalsIgnoreCase(cat)) categorie = com.tropimon.randompvp.calc.Move.Categorie.SPECIALE;
+        else categorie = com.tropimon.randompvp.calc.Move.Categorie.STATUT;
+        return com.tropimon.randompvp.calc.Move.builder(template.getName(), type, categorie)
+            .puissance((int) template.getPower())
+            
+            .poing(com.tropimon.randompvp.calc.MoveFlags.estPoing(template.getName()))
+            .morsure(com.tropimon.randompvp.calc.MoveFlags.estMorsure(template.getName()))
+            .build();
+    }
+}

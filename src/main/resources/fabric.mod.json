@@ -1,0 +1,26 @@
+{
+  "schemaVersion": 1,
+  "id": "randompvp",
+  "version": "${version}",
+  "name": "RandomPvp",
+  "description": "Calculateur de dégâts automatique pour les random battles Cobblemon (Tropimon) — 31 IV / 85 EV / nature neutre",
+  "authors": [
+    "Maitre"
+  ],
+  "contact": {},
+  "license": "MIT",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "com.tropimon.randompvp.RandomPvpClient"
+    ]
+  },
+  "mixins": [
+    "randompvp.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.16.9",
+    "minecraft": "~1.21.1",
+    "java": ">=21"
+  }
+}
