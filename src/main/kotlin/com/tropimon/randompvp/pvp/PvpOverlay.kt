@@ -449,6 +449,7 @@ object PvpOverlay {
     // ──────────────────────────────────────────────────────────────────────────
 
     private fun handleDrag(client: MinecraftClient) {
+        if (!com.tropimon.randompvp.battle.RandomBattleGate.estActif()) return
         if (!ModConfig.pvpOverlayEnabled) return
         if (!BattleHelper.isInBattle()) return
         if (playerX == -1 || opponentX == -1) return

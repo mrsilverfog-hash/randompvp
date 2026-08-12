@@ -53,10 +53,17 @@ Le profil 85 EV n'est vrai QU'EN random battle. Appliqué à un combat classé o
 sauvage, il produit des chiffres faux sans le signaler. Le mod est donc **inactif
 par défaut** et passe par une porte unique, `battle/RandomBattleGate` :
 
-- `RandomBattleGate.estActif()` est testé au tout début de chaque point d'entrée :
-  `CalcOverlay.onHudRender`, `SwitchOverlayRenderer.render`, `PvpOverlay.render`,
-  `PvpDetector` (scan d'écran) et `BattleMessageHandlerMixin`. Désarmé, le mod
-  n'affiche rien et n'accumule aucune observation.
+- `RandomBattleGate.estActif()` est testé au tout début de chaque point d'entrée
+  **qui affiche ou calcule** : `CalcOverlay.onHudRender`,
+  `SwitchOverlayRenderer.render`, `PvpOverlay.render`, `PvpOverlay.handleDrag` et
+  `BattleMessageHandlerMixin`. Désarmé, le mod n'affiche rien et n'accumule
+  aucune observation. Les panneaux d'équipe PvP suivent donc la touche, comme le
+  HUD principal.
+- **Exception délibérée** : `PvpDetector` (scan de l'écran de sélection) n'est PAS
+  soumis à la porte. Il ne fait que remplir des listes en mémoire, sans rien
+  afficher. S'il était bloqué, armer le mod après la fermeture de l'écran de
+  sélection laisserait les panneaux vides pour tout le combat — le moment où on
+  appuie sur la touche ne doit pas changer le résultat.
 - Armement manuel par **F8** (rebindable, catégorie RandomPvp). Confirmation en
   chat, et bandeau `RandomPvp : ACTIF (F8)` en haut à gauche hors combat.
 - L'état **n'est pas persisté** : chaque lancement du jeu repart désarmé. Un état

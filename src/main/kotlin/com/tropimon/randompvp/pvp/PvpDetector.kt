@@ -73,7 +73,10 @@ object PvpDetector {
             if (screen !is HandledScreen<*>) return@afterInit
             val title = screen.title.string
 
-            if (!com.tropimon.randompvp.battle.RandomBattleGate.estActif()) return@afterInit
+            // Volontairement NON soumis a RandomBattleGate : le scan ne fait que
+            // remplir des listes en memoire, il n'affiche rien. S'il etait bloque,
+            // armer le mod apres la fermeture de l'ecran de selection laisserait
+            // les panneaux vides pour tout le combat.
             if (!isChallenge(title) && !isRanked(title)) return@afterInit
 
             tickCounter    = 0
