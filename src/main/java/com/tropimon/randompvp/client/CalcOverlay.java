@@ -35,14 +35,6 @@ public final class CalcOverlay implements HudRenderCallback {
     private static final int COULEUR_DANGER = 0xFF8800;
     private static final int COULEUR_REVELE = 0x55FF55;
 
-    /** Bandeau discret rappelant que le mode random battle est armé hors combat. */
-    private static void indicateurArme(DrawContext context) {
-        MinecraftClient mc = MinecraftClient.getInstance();
-        if (mc == null || mc.textRenderer == null) return;
-        context.drawTextWithShadow(mc.textRenderer,
-            Text.literal("RandomPvp : ACTIF (F8)"), 4, 4, COULEUR_TITRE);
-    }
-
     @Override
     public void onHudRender(DrawContext context, net.minecraft.client.render.RenderTickCounter tickCounter) {
         // Porte principale : hors mode random battle, le mod ne fait RIEN.
@@ -53,10 +45,7 @@ public final class CalcOverlay implements HudRenderCallback {
         // Doit tourner AUSSI hors combat : c'est là que le reset entre combats s'exécute
         ObservationCollector.tick();
 
-        if (!BattleStateTracker.estEnCombat()) {
-            indicateurArme(context);
-            return;
-        }
+        if (!BattleStateTracker.estEnCombat()) return;
 
         Pokemon adversaireBase = BattleStateTracker.getAdversaireActif();
         com.cobblemon.mod.common.pokemon.Pokemon monComplet = BattleStateTracker.getPokemonCompletJoueurAffichage();

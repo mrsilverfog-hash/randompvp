@@ -64,8 +64,9 @@ par défaut** et passe par une porte unique, `battle/RandomBattleGate` :
   afficher. S'il était bloqué, armer le mod après la fermeture de l'écran de
   sélection laisserait les panneaux vides pour tout le combat — le moment où on
   appuie sur la touche ne doit pas changer le résultat.
-- Armement manuel par **F8** (rebindable, catégorie RandomPvp). Confirmation en
-  chat, et bandeau `RandomPvp : ACTIF (F8)` en haut à gauche hors combat.
+- Armement manuel par **F8** (rebindable, Options > Contrôles > catégorie
+  RandomPvp). Seul retour visuel : un message en chat à chaque bascule. Pas de
+  bandeau HUD (retiré à la demande).
 - L'état **n'est pas persisté** : chaque lancement du jeu repart désarmé. Un état
   sauvegardé qui traîne est exactement le scénario où le mod s'activerait sur un
   combat classé sans qu'on le remarque.
