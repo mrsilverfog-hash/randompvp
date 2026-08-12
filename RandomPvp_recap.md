@@ -37,6 +37,18 @@ Ce qui a été **retiré** par rapport à TropiCalc :
 - `appliquerHypothese()` et `trouverNatureBoostant()`, et les appels d'inférence d'EV
   dans `construireAdversaireEstime`. Le moteur `SetInferenceEngine` reste actif mais
   ne sert plus qu'à resserrer les candidats **objet et talent**.
+- Toute énumération d'EV et de nature dans le moteur d'inférence.
+  `SetInferenceEngine.narrow()` ne boucle plus que sur objet × talent (avant :
+  0→252 EV par pas de 4 × 3 natures × objets × talents) ;
+  `construirePokemonHypothetique()` applique `RandomBattleFormat` ;
+  `NatureBoost`, `trouverNaturePour()` et `arrondirAuPlusProche4()` sont supprimés.
+  `StatHypothesis` naît avec `evMin = evMax = 85` et la nature neutre seule
+  autorisée, et `ProfilAdversaire` n'applique plus les plages d'EV Smogon — il n'en
+  garde que les listes d'objets/talents candidats. L'inférence y gagne : tout écart
+  de dégâts résiduel ne peut plus venir que de l'objet ou du talent.
+- **À l'affichage** : le bandeau « Set estimé : HP x | Def y | DéfSpé z | NATURE »
+  et la ligne « Inférence Def EV a-b » sont retirés de `CalcOverlay`. Seul
+  « Objet confirmé : ... » subsiste, et uniquement sur un fait établi.
 
 Ce qui n'a **pas** bougé : la lecture du niveau. `cbp.getLevel()` la fournit déjà pour
 les deux camps, et `Pokemon.getStatCalculee()` utilise `niveau` comme variable, jamais
