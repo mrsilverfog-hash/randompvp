@@ -18,8 +18,10 @@ import com.tropimon.randompvp.RandomPvpClient;
  * exactement le scénario où le mod s'activerait sur un combat classé sans que
  * personne le remarque.
  *
- * La détection automatique du format viendra remplacer l'armement manuel une
- * fois le signal identifié (voir DetectionDebugLogger).
+ * L'armement est manuel par choix : une touche dédiée (F8 par défaut, modifiable
+ * dans Options > Contrôles > catégorie RandomPvp). Pas de détection automatique
+ * du format — décision assumée, le contrôle explicite est plus fiable qu'une
+ * heuristique sur des écrans ou des messages serveur susceptibles de changer.
  */
 public final class RandomBattleGate {
 

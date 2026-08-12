@@ -45,9 +45,6 @@ public final class CalcOverlay implements HudRenderCallback {
 
     @Override
     public void onHudRender(DrawContext context, net.minecraft.client.render.RenderTickCounter tickCounter) {
-        // Diagnostic de détection de format : tourne toujours, même mod désarmé
-        com.tropimon.randompvp.battle.DetectionDebugLogger.tickCombat();
-
         // Porte principale : hors mode random battle, le mod ne fait RIEN.
         if (!com.tropimon.randompvp.battle.RandomBattleGate.estActif()) {
             return;

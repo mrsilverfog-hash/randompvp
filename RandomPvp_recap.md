@@ -65,21 +65,17 @@ par défaut** et passe par une porte unique, `battle/RandomBattleGate` :
 - Le désarmement appelle `ObservationCollector.reinitialiser()` pour qu'aucune
   observation d'un autre format ne survive.
 
-### Détection automatique : à faire
+### Pas de détection automatique — décision prise
 
-L'armement manuel est une sécurité, pas la solution finale. Le signal client qui
-distingue une random battle d'un combat classé n'est pas encore identifié :
-`PvpDetector` reconnaît le classé par le titre d'écran `Sélection de l'équipe` et
-le challenge par `Select your Lead Pokemon`, mais la file random battle se rejoint
-en cliquant un hologramme, et on ne sait pas quel écran ou quel message
-l'accompagne.
+L'activation reste **manuelle et définitive** sur ce point : pas de détection du
+format par titre d'écran ou message serveur. Une heuristique de ce genre dépend
+de chaînes de caractères du serveur qui peuvent changer sans prévenir, et un faux
+positif signifierait des chiffres faux affichés en combat classé sans avertissement.
+La touche dédiée est explicite et ne peut pas se tromper.
 
-`battle/DetectionDebugLogger` (temporaire, actif même mod désarmé) écrit dans
-`config/randompvp-detection-debug.txt` : titre de chaque écran ouvert, chaque
-message de chat / barre d'action / combat, et les transitions début-fin de combat.
-Jouer une random battle **et** un combat classé, puis comparer les deux traces
-pour trouver le discriminant. Une fois trouvé, il remplacera l'armement manuel
-dans `RandomBattleGate` et ce logger sera retiré.
+Le `DetectionDebugLogger` qui servait à identifier ce signal a été retiré
+(commit de nettoyage). Le `MessageDebugLogger` d'origine, lui, reste en place :
+il sert au débogage des messages de combat, pas à la détection de format.
 
 ---
 

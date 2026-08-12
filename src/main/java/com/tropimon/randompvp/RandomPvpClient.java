@@ -1,13 +1,11 @@
 package com.tropimon.randompvp;
 
-import com.tropimon.randompvp.battle.DetectionDebugLogger;
 import com.tropimon.randompvp.battle.RandomBattleGate;
 import com.tropimon.randompvp.calc.SmogonDataLoader;
 import com.tropimon.randompvp.client.CalcOverlay;
 import net.fabricmc.api.ClientModInitializer;
 import net.fabricmc.fabric.api.client.event.lifecycle.v1.ClientTickEvents;
 import net.fabricmc.fabric.api.client.keybinding.v1.KeyBindingHelper;
-import net.fabricmc.fabric.api.client.message.v1.ClientReceiveMessageEvents;
 import net.fabricmc.fabric.api.client.rendering.v1.HudRenderCallback;
 import net.minecraft.client.option.KeyBinding;
 import net.minecraft.client.util.InputUtil;
@@ -21,6 +19,10 @@ public class RandomPvpClient implements ClientModInitializer {
     public static final String MOD_ID = "randompvp";
     public static final Logger LOGGER = LoggerFactory.getLogger(MOD_ID);
 
+    /**
+     * Touche d'activation du mode random battle. F8 par défaut, modifiable
+     * dans Options > Contrôles > catégorie RandomPvp.
+     */
     private static KeyBinding toucheBascule;
 
     @Override
@@ -52,11 +54,6 @@ public class RandomPvpClient implements ClientModInitializer {
             }
         });
 
-        // Diagnostic de détection : journalise les messages serveur pour
-        // identifier le signal propre à la random battle. À retirer ensuite.
-        ClientReceiveMessageEvents.GAME.register((message, overlay) ->
-            DetectionDebugLogger.message(overlay ? "BARRE" : "CHAT", message.getString()));
-
-        LOGGER.info("RandomPvp charge - inactif par defaut, F8 pour armer le mode random battle");
+        LOGGER.info("RandomPvp charge - inactif par defaut, touche RandomPvp (F8 par defaut) pour armer");
     }
 }

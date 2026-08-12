@@ -73,10 +73,6 @@ object PvpDetector {
             if (screen !is HandledScreen<*>) return@afterInit
             val title = screen.title.string
 
-            // Diagnostic : tout titre d'écran est journalisé, mod armé ou non.
-            // C'est ce qui permettra d'identifier l'écran propre à la random battle.
-            com.tropimon.randompvp.battle.DetectionDebugLogger.ecran(title)
-
             if (!com.tropimon.randompvp.battle.RandomBattleGate.estActif()) return@afterInit
             if (!isChallenge(title) && !isRanked(title)) return@afterInit
 
