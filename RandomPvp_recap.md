@@ -214,6 +214,33 @@ Faits confirmés sauvegardés dans `config/randompvp-scouting.json`, indexés pa
 
 Portage fidèle du code 1.3.8 de TropiHunterBoard (licence MIT, attribution PiikaPops), enrichissements RandomPvp en surcouche d'affichage uniquement. Le tooltip lit les mêmes structures centrales que la section 3 — profite donc automatiquement de toute nouvelle confirmation ou tout nouveau talent ajouté, sans modification Kotlin nécessaire.
 
+Chaque vignette affiche le sprite, la barre de PV, un point de statut en haut à
+gauche (brûlure, poison, paralysie, sommeil, gel) et l'icône de l'objet tenu en
+bas à droite. Le survol ouvre un tooltip complet : types, PV, statut, capacités et
+PP, talent, objet.
+
+### Adaptation random battle
+
+Le rendu était conditionné à `PvpDetector.pvpSessionActive`, drapeau levé
+uniquement à l'ouverture d'un écran de sélection d'équipe (`Sélection de
+l'équipe` / `Select your Lead Pokemon`). En random battle cet écran n'existe pas
+— l'équipe est générée et on rejoint une file — donc **les panneaux ne
+s'affichaient jamais**, statut et objet compris.
+
+- `PvpOverlay.render()` : la condition est ramenée au seul fait d'être en combat
+  Cobblemon. Un panneau dont l'équipe est vide n'est plus dessiné du tout.
+- `BattleTracker.buildOpponentTeam()` : à défaut de scrape d'écran, l'équipe
+  adverse est construite depuis `opponentRevealed`, une `LinkedHashMap` remplie
+  au fil des switchs dans `sync()` (espèce → aspects, via `bp.properties.aspects`
+  — `bp.aspects` est privé sur `ClientBattlePokemon`).
+
+Conséquence assumée : en random battle le panneau adverse **se remplit
+progressivement** au lieu d'afficher les 6 dès le départ. C'est le reflet exact
+de l'information disponible côté client, pas une limitation contournable — sans
+écran de sélection, on ne connaît un adversaire qu'une fois qu'il est entré sur
+le terrain. L'objet et le talent adverses restent vides dans ce mode (ils ne sont
+pas transmis) ; c'est la section 3 qui les confirme par observation.
+
 Limite connue, cosmétique uniquement (aucun impact sur le calcul de dégâts) : la ligne "types" du tooltip ne reflète pas la Téracristallisation en cours.
 
 ---
