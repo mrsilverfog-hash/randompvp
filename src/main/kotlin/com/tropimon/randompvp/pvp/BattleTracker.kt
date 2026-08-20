@@ -128,7 +128,7 @@ object BattleTracker {
                     opponentFainted[key] = hp <= 0f
                     opponentStatus[key]  = try { bp.status?.showdownName } catch (_: Exception) { null }
                     if (!opponentRevealed.containsKey(key)) {
-                        opponentRevealed[key] = try { bp.aspects } catch (_: Exception) { emptySet() }
+                        opponentRevealed[key] = try { bp.properties.aspects } catch (_: Exception) { emptySet() }
                     }
                 }
             }
