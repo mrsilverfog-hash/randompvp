@@ -81,7 +81,11 @@ object PvpOverlay {
             BattleTracker.clearState()
         }
         wasInBattle = inBattle
-        if (!inBattle || !PvpDetector.pvpSessionActive) return
+        // Volontairement PAS conditionne a PvpDetector.pvpSessionActive : ce
+        // drapeau exige un ecran de selection d'equipe, qui n'existe pas en
+        // random battle (l'equipe est generee, on rejoint une file). Le combat
+        // Cobblemon suffit comme condition.
+        if (!inBattle) return
 
         // Sync battle state every frame
         BattleTracker.sync()
@@ -108,8 +112,14 @@ object PvpOverlay {
         val playerTeam   = resolvePlayerTeam()
         val opponentTeam = resolveOpponentTeam()
 
-        renderPanel(context, playerX,   playerY,   playerTeam,   ModConfig.accentColor(), mx, my)
-        renderPanel(context, opponentX, opponentY, opponentTeam, RED,                    mx, my)
+        if (playerTeam.isEmpty() && opponentTeam.isEmpty()) return
+
+        if (playerTeam.isNotEmpty()) {
+            renderPanel(context, playerX, playerY, playerTeam, ModConfig.accentColor(), mx, my)
+        }
+        if (opponentTeam.isNotEmpty()) {
+            renderPanel(context, opponentX, opponentY, opponentTeam, RED, mx, my)
+        }
 
         // Draw tooltip on top of everything
         tooltipMon?.let { renderTooltip(context, it, tooltipAnchorX, tooltipAnchorY, sw, sh) }

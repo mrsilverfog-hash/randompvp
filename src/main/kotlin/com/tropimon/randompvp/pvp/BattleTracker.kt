@@ -127,6 +127,9 @@ object BattleTracker {
                     opponentHpMap[key]   = hp
                     opponentFainted[key] = hp <= 0f
                     opponentStatus[key]  = try { bp.status?.showdownName } catch (_: Exception) { null }
+                    if (!opponentRevealed.containsKey(key)) {
+                        opponentRevealed[key] = try { bp.aspects } catch (_: Exception) { emptySet() }
+                    }
                 }
             }
 
@@ -135,12 +138,24 @@ object BattleTracker {
         } catch (_: Exception) {}
     }
 
+    /**
+     * Adversaires effectivement vus en combat, dans l'ordre d'apparition.
+     * En random battle il n'y a pas d'ecran de selection a scraper : la seule
+     * source d'equipe adverse, c'est ce qui entre sur le terrain. On accumule
+     * donc au fil des switchs. Consequence assumee : le panneau adverse se
+     * remplit progressivement au lieu d'afficher les 6 des le debut — c'est la
+     * realite de l'information disponible, pas une limitation qu'on pourrait
+     * contourner.
+     */
+    private val opponentRevealed = LinkedHashMap<String, Set<String>>()
+
     fun clearState() {
         playerTeam   = emptyList()
         opponentTeam = emptyList()
         opponentHpMap.clear()
         opponentFainted.clear()
         opponentStatus.clear()
+        opponentRevealed.clear()
     }
 
     // ─────────────────────────────────────────────────────────────────────────
@@ -227,7 +242,26 @@ object BattleTracker {
 
     private fun buildOpponentTeam(): List<TrackedMon> {
         val base = PvpDetector.opponentTeam
-        if (base.isEmpty()) return emptyList()
+
+        // Random battle : aucun ecran de selection n'a ete scrape, on retombe
+        // sur les adversaires reellement apparus sur le terrain.
+        if (base.isEmpty()) {
+            return opponentRevealed.map { (key, aspects) ->
+                TrackedMon(
+                    speciesId   = key,
+                    aspects     = aspects,
+                    hpPercent   = opponentHpMap[key] ?: 1f,
+                    isFainted   = opponentFainted[key] ?: false,
+                    statusKey   = opponentStatus[key],
+                    types       = resolveTypes(key, aspects),
+                    moves       = emptyList(),
+                    abilityName = null,
+                    abilityDesc = null,
+                    heldItem    = ItemStack.EMPTY,
+                    isOwn       = false
+                )
+            }
+        }
 
         return base.map { pvp ->
             val key       = pvp.speciesId
