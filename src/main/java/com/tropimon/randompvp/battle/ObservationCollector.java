@@ -71,6 +71,11 @@ public final class ObservationCollector {
     private static String espaceAdversaireDuTour = null;
 
     public static synchronized void signalerNouveauTour() {
+        // Une appelante peut échouer (Blabladodo sur un Pokémon réveillé) : aucun
+        // coup tiré ne suit alors. Sans ce reset, le drapeau survivrait au tour et
+        // ferait sauter à tort le décompte de PP du coup suivant.
+        appelantAdversaireEnAttente = null;
+
         Pokemon joueur = BattleStateTracker.getJoueurActifDepuisEquipe();
         if (joueur == null) joueur = BattleStateTracker.getJoueurActif();
         Pokemon adversaire = BattleStateTracker.getAdversaireActif();
@@ -220,23 +225,42 @@ public final class ObservationCollector {
             coupVerrouAdversaire = coup.showdownId();
             Pokemon adversaire = BattleStateTracker.getAdversaireActif();
             if (adversaire != null) {
-                COUPS_ADVERSAIRE
-                    .computeIfAbsent(adversaire.getEspece(), k -> new LinkedHashSet<>())
-                    .add(coup.showdownId());
+                // Ce coup a-t-il été TIRÉ par une appelante jouée juste avant ?
+                String appelant = appelantAdversaireEnAttente;
+                appelantAdversaireEnAttente = null;
+                boolean coupTire = appelant != null;
 
-                // Comptage des PP : Pression (talent du joueur) ajoute 1 PP,
-                // mais seulement si la capacité CIBLE le Pokémon qui a Pression
-                // (Abri, Soin, Vœu, Piège de Roc etc. ne sont pas affectés)
-                int cout = 1;
-                Pokemon joueurActif = BattleStateTracker.getJoueurActifDepuisEquipe();
-                if (joueurActif == null) joueurActif = BattleStateTracker.getJoueurActif();
-                if (joueurActif != null && "Pression".equals(joueurActif.getTalent())
-                    && cibleLAdversaire(coup.showdownId())) {
-                    cout = 2;
+                // Un coup tiré par Blabladodo appartient bien au moveset adverse
+                // et mérite d'être retenu ; un coup de Métronome, non.
+                if (!coupTire || APPELANTS_MOVESET_REEL.contains(appelant)) {
+                    COUPS_ADVERSAIRE
+                        .computeIfAbsent(adversaire.getEspece(), k -> new LinkedHashSet<>())
+                        .add(coup.showdownId());
                 }
-                PP_UTILISES
-                    .computeIfAbsent(adversaire.getEspece(), k -> new HashMap<>())
-                    .merge(coup.showdownId(), cout, Integer::sum);
+
+                // Comptage des PP. Un coup tiré n'en consomme aucun : seule
+                // l'appelante a été décomptée, au message précédent.
+                if (!coupTire) {
+                    // Pression (talent du joueur) ajoute 1 PP, mais seulement si
+                    // la capacité CIBLE le Pokémon qui a Pression (Abri, Soin,
+                    // Atterrissage, Vœu, Piège de Roc etc. ne sont pas affectés)
+                    int cout = 1;
+                    Pokemon joueurActif = BattleStateTracker.getJoueurActifDepuisEquipe();
+                    if (joueurActif == null) joueurActif = BattleStateTracker.getJoueurActif();
+                    if (joueurActif != null && "Pression".equals(joueurActif.getTalent())
+                        && cibleLAdversaire(coup.showdownId())) {
+                        cout = 2;
+                    }
+                    PP_UTILISES
+                        .computeIfAbsent(adversaire.getEspece(), k -> new HashMap<>())
+                        .merge(coup.showdownId(), cout, Integer::sum);
+
+                    // Si c'est une appelante, le prochain coup du même camp sera
+                    // le coup tiré et ne devra rien coûter.
+                    if (COUPS_APPELANTS.contains(coup.showdownId())) {
+                        appelantAdversaireEnAttente = coup.showdownId();
+                    }
+                }
             }
         } else {
             coupJoueurDuTour = coup;
@@ -604,17 +628,93 @@ public final class ObservationCollector {
     }
 
     /**
+     * Capacités qui ne visent PAS l'adversaire : soins et boosts sur soi,
+     * protections, pièges et écrans de terrain, météo, terrains, salles.
+     *
+     * Pression ne s'applique qu'aux capacités qui ciblent le porteur du talent.
+     * On s'appuie sur cette liste explicite plutôt que sur le champ target de
+     * Cobblemon : String.valueOf(t.getTarget()) ne renvoie pas toujours un
+     * libellé exploitable, et quand la reconnaissance échoue le code retombait
+     * sur "on suppose offensive" — d'où le PP en trop compté sur Atterrissage.
+     * Une donnée qu'on maîtrise vaut mieux ici qu'une API dont le format
+     * n'est pas garanti.
+     */
+    /**
+     * Capacités qui en déclenchent une autre. Seule l'appelante consomme des PP :
+     * un Ronflex qui sort Repos via Blabladodo dépense 1 PP de Blabladodo et
+     * zéro PP de Repos. Le message Cobblemon "used_move" est pourtant émis pour
+     * les deux, d'où le double comptage.
+     *
+     * Blabladodo est à part : la capacité tirée fait réellement partie du moveset
+     * adverse, donc elle reste enregistrée dans COUPS_ADVERSAIRE (information
+     * légitime). Pour Métronome ou Copie, la capacité tirée n'appartient pas à
+     * l'adversaire et ne doit pas être retenue comme sienne.
+     */
+    private static final java.util.Set<String> COUPS_APPELANTS = java.util.Set.of(
+        "sleeptalk", "metronome", "copycat", "naturepower", "assist",
+        "mirrormove", "mefirst"
+    );
+
+    /** Capacités appelantes dont le coup tiré appartient bien à l'adversaire. */
+    private static final java.util.Set<String> APPELANTS_MOVESET_REEL = java.util.Set.of(
+        "sleeptalk"
+    );
+
+    /**
+     * Non-null quand la capacité adverse précédente était une appelante : le
+     * prochain "used_move" du même camp est alors le coup tiré, pas un coup joué.
+     */
+    private static String appelantAdversaireEnAttente = null;
+
+    private static final java.util.Set<String> COUPS_SANS_CIBLE_ADVERSE = java.util.Set.of(
+        // Soins sur soi
+        "roost", "recover", "softboiled", "slackoff", "rest", "synthesis",
+        "moonlight", "morningsun", "shoreup", "milkdrink", "healorder",
+        "purify", "junglehealing", "lifedew", "strengthsap",
+        // Protections
+        "protect", "detect", "spikyshield", "banefulbunker", "silktrap",
+        "burningbulwark", "obstruct", "kingsshield", "maxguard", "endure",
+        // Boosts et statuts sur soi
+        "swordsdance", "nastyplot", "calmmind", "bulkup", "dragondance",
+        "quiverdance", "irondefense", "agility", "workup", "shellsmash",
+        "cosmicpower", "amnesia", "barrier", "acidarmor", "harden", "withdraw",
+        "defensecurl", "growth", "howl", "meditate", "sharpen", "doubleteam",
+        "minimize", "focusenergy", "charge", "ingrain", "aquaring",
+        "magnetrise", "autotomize", "stockpile", "swallow", "bellydrum",
+        "substitute", "refresh", "recycle", "tidyup", "victorydance",
+        "takeheart", "clangoroussoul", "noretreat", "filletaway",
+        // Souhaits et relais
+        "wish", "healingwish", "lunardance", "batonpass", "teleport",
+        "healbell", "aromatherapy", "sleeptalk",
+        // Pièges et écrans de terrain
+        "stealthrock", "spikes", "toxicspikes", "stickyweb", "reflect",
+        "lightscreen", "auroraveil", "tailwind", "safeguard", "mist",
+        "luckychant", "craftyshield", "matblock", "quickguard", "wideguard",
+        // Météo, terrains, salles
+        "sunnyday", "raindance", "sandstorm", "hail", "snowscape", "chillyreception",
+        "electricterrain", "grassyterrain", "psychicterrain", "mistyterrain",
+        "trickroom", "magicroom", "wonderroom", "gravity"
+    );
+
+    /**
      * Vrai si la capacité cible un Pokémon adverse (condition d'application de Pression).
      * Faux pour les cibles soi-même, alliés, côté de terrain, ou terrain entier.
      */
     private static boolean cibleLAdversaire(String moveId) {
-        MoveTemplate t = Moves.INSTANCE.getByName(moveId);
-        if (t == null) return true; // inconnue : on suppose offensive
-        String cible = String.valueOf(t.getTarget()).toLowerCase();
-        if (cible.equals("all")) return false;          // météo, Champ Psychique...
-        if (cible.contains("self")) return false;       // Abri, Soin, Danse Lames...
-        if (cible.contains("ally") || cible.contains("allies")) return false;
-        if (cible.contains("side")) return false;       // Piège de Roc, Picots, écrans...
+        if (moveId == null) return true;
+        if (COUPS_SANS_CIBLE_ADVERSE.contains(moveId)) return false;
+
+        // Secondaire : le champ target de Cobblemon, quand il est exploitable.
+        try {
+            MoveTemplate t = Moves.INSTANCE.getByName(moveId);
+            if (t == null) return true; // inconnue : on suppose offensive
+            String cible = String.valueOf(t.getTarget()).toLowerCase();
+            if (cible.equals("all")) return false;          // météo, Champ Psychique...
+            if (cible.contains("self")) return false;       // Abri, Soin, Danse Lames...
+            if (cible.contains("ally") || cible.contains("allies")) return false;
+            if (cible.contains("side")) return false;       // Piège de Roc, Picots, écrans...
+        } catch (Throwable ignored) {
+        }
         return true;
     }
 
@@ -897,6 +997,7 @@ public final class ObservationCollector {
         especeJoueurSuivie = null;
         OBJETS_RETIRES.clear();
         VITESSES_MIN_OBSERVEES.clear();
+        appelantAdversaireEnAttente = null;
         BoostTracker.reinitialiser();
         TypeTracker.reinitialiser();
         FieldTracker.reinitialiser();
