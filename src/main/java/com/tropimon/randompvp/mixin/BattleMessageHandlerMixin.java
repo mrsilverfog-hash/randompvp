@@ -22,6 +22,7 @@ public class BattleMessageHandlerMixin {
     private void randompvp$onBattleMessage(BattleMessagePacket packet, MinecraftClient client, CallbackInfo ci) {
         if (packet == null) return;
         if (!com.tropimon.randompvp.battle.RandomBattleGate.estActif()) return;
+        if (MoveUseTracker.dejaTraite(packet)) return;
 
         try {
             for (Text message : packet.getMessages()) {
