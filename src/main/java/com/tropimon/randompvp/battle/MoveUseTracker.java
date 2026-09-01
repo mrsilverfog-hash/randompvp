@@ -8,6 +8,40 @@ public final class MoveUseTracker {
     private MoveUseTracker() {
     }
 
+    /**
+     * Paquets deja traites, pour ne jamais compter un message deux fois.
+     *
+     * Deux mixins alimentent ce tracker : BattleMessagePacketMixin au decodage
+     * reseau, BattleMessageHandlerMixin a l'affichage. Le second peut etre
+     * court-circuite par un mod qui remplace l'interface de combat (Cobblemon
+     * Extended Battle UI), le premier non — on garde donc les deux points
+     * d'entree, mais le MEME paquet passe par les deux. Sans ce garde-fou,
+     * chaque capacite consommait 2 PP au lieu d'un (et 4 avec Pression).
+     *
+     * Comparaison par identite d'objet (==) et non par hachage : le paquet
+     * decode est litteralement la meme instance que celle passee au handler,
+     * et une egalite exacte evite tout faux positif qui ferait perdre un
+     * paquet legitime. File bornee : on ne retient que les plus recents.
+     */
+    private static final java.util.ArrayDeque<Object> PAQUETS_TRAITES = new java.util.ArrayDeque<>();
+    private static final int MEMOIRE_PAQUETS = 32;
+
+    /**
+     * Marque ce paquet comme traite et indique s'il l'avait deja ete.
+     * Le premier des deux mixins a le voir gagne ; l'autre se retire.
+     */
+    public static synchronized boolean dejaTraite(Object paquet) {
+        if (paquet == null) return false;
+        for (Object vu : PAQUETS_TRAITES) {
+            if (vu == paquet) return true;
+        }
+        PAQUETS_TRAITES.addLast(paquet);
+        while (PAQUETS_TRAITES.size() > MEMOIRE_PAQUETS) {
+            PAQUETS_TRAITES.removeFirst();
+        }
+        return false;
+    }
+
     private static final String CLE_PREFIXE_COUP = "cobblemon.move.";
     private static final String CLE_UTILISE_COUP = "cobblemon.battle.used_move";
     private static final String CLE_UTILISE_COUP_SUR = "cobblemon.battle.used_move_on";
