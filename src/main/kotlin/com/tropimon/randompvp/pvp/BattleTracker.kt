@@ -142,10 +142,7 @@ object BattleTracker {
      * Adversaires effectivement vus en combat, dans l'ordre d'apparition.
      * En random battle il n'y a pas d'ecran de selection a scraper : la seule
      * source d'equipe adverse, c'est ce qui entre sur le terrain. On accumule
-     * donc au fil des switchs. Consequence assumee : le panneau adverse se
-     * remplit progressivement au lieu d'afficher les 6 des le debut — c'est la
-     * realite de l'information disponible, pas une limitation qu'on pourrait
-     * contourner.
+     * donc au fil des switchs.
      */
     private val opponentRevealed = LinkedHashMap<String, Set<String>>()
 
@@ -247,19 +244,10 @@ object BattleTracker {
         // sur les adversaires reellement apparus sur le terrain.
         if (base.isEmpty()) {
             return opponentRevealed.map { (key, aspects) ->
-                TrackedMon(
-                    speciesId   = key,
-                    aspects     = aspects,
-                    hpPercent   = opponentHpMap[key] ?: 1f,
-                    isFainted   = opponentFainted[key] ?: false,
-                    statusKey   = opponentStatus[key],
-                    types       = resolveTypes(key, aspects),
-                    moves       = emptyList(),
-                    abilityName = null,
-                    abilityDesc = null,
-                    heldItem    = ItemStack.EMPTY,
-                    isOwn       = false
-                )
+                TrackedMon(key, aspects, opponentHpMap[key] ?: 1f,
+                           opponentFainted[key] ?: false, opponentStatus[key],
+                           resolveTypes(key, aspects), emptyList(), null, null,
+                           ItemStack.EMPTY, isOwn = false)
             }
         }
 

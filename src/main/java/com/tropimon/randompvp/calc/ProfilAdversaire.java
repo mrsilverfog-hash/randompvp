@@ -27,13 +27,34 @@ public class ProfilAdversaire {
     }
 
     public ProfilAdversaire(Set<String> talentsReelsEspece, SmogonDataLoader.SmogonPokemonData smogon) {
+        this(talentsReelsEspece, smogon, null, null);
+    }
+
+    /**
+     * @param objetConfirme  objet déjà CONFIRMÉ par observation (Restes,
+     *                       Casque Brut, Mouchoir/Bandeau/Lunettes Choix,
+     *                       Orbe Vie, Évoluroc...) - si non-null, verrouille
+     *                       le candidat objet UNIQUE plutôt que de continuer
+     *                       à tester des alternatives déjà écartées avec
+     *                       certitude. Sans ça, chaque nouvelle observation
+     *                       de dégâts re-teste "et si c'était un autre
+     *                       objet ?" pour rien, ce qui empêche l'EV de se
+     *                       resserrer aussi précisément que possible une
+     *                       fois l'objet réellement connu.
+     * @param talentConfirme même principe pour le talent.
+     */
+    public ProfilAdversaire(Set<String> talentsReelsEspece, SmogonDataLoader.SmogonPokemonData smogon,
+                             String objetConfirme, String talentConfirme) {
         if (smogon == null || smogon.topSpreads().isEmpty()) {
             Set<String> talentsOff = intersection(SetInferenceEngine.TALENTS_OFFENSIFS, talentsReelsEspece);
             Set<String> talentsDef = intersection(SetInferenceEngine.TALENTS_DEFENSIFS, talentsReelsEspece);
-            this.attaque = new StatHypothesis(SetInferenceEngine.OBJETS_OFFENSIFS, talentsOff);
-            this.attaqueSpe = new StatHypothesis(SetInferenceEngine.OBJETS_OFFENSIFS, talentsOff);
-            this.defense = new StatHypothesis(SetInferenceEngine.OBJETS_DEFENSIFS, talentsDef);
-            this.defenseSpe = new StatHypothesis(SetInferenceEngine.OBJETS_DEFENSIFS, talentsDef);
+            if (talentConfirme != null) { talentsOff = Set.of(talentConfirme); talentsDef = Set.of(talentConfirme); }
+            Set<String> objetsOff = objetConfirme != null ? Set.of(objetConfirme) : SetInferenceEngine.OBJETS_OFFENSIFS;
+            Set<String> objetsDef = objetConfirme != null ? Set.of(objetConfirme) : SetInferenceEngine.OBJETS_DEFENSIFS;
+            this.attaque = new StatHypothesis(objetsOff, talentsOff);
+            this.attaqueSpe = new StatHypothesis(objetsOff, talentsOff);
+            this.defense = new StatHypothesis(objetsDef, talentsDef);
+            this.defenseSpe = new StatHypothesis(objetsDef, talentsDef);
             return;
         }
 
@@ -70,6 +91,18 @@ public class ProfilAdversaire {
         Set<String> objetsDefSmogon = intersection(objetsSmogon, SetInferenceEngine.OBJETS_DEFENSIFS);
         if (objetsDefSmogon.isEmpty()) objetsDefSmogon = SetInferenceEngine.OBJETS_DEFENSIFS;
 
+        // Verrouillage si l'objet/talent est déjà CONFIRMÉ par observation :
+        // un seul candidat plutôt que de continuer à tester des
+        // alternatives déjà écartées avec certitude.
+        if (objetConfirme != null) {
+            objetsSmogon = Set.of(objetConfirme);
+            objetsDefSmogon = Set.of(objetConfirme);
+        }
+        if (talentConfirme != null) {
+            talentsSmogon = Set.of(talentConfirme);
+            talentsDefSmogon = Set.of(talentConfirme);
+        }
+
         this.attaque = construireHypothese(plages, Stat.ATTAQUE, objetsSmogon, talentsSmogon);
         this.attaqueSpe = construireHypothese(plages, Stat.ATTAQUE_SPE, objetsSmogon, talentsSmogon);
         this.defense = construireHypothese(plages, Stat.DEFENSE,
@@ -78,12 +111,33 @@ public class ProfilAdversaire {
             objetsDefSmogon, talentsDefSmogon);
     }
 
+    /**
+     * Verrouille rétroactivement l'objet/talent candidat d'un profil déjà
+     * construit, sans perdre les plages EV déjà resserrées par narrowing -
+     * nécessaire car la confirmation arrive souvent APRÈS la première
+     * construction du profil (computeIfAbsent ne le reconstruit jamais).
+     */
+    public void verrouillerSiConfirme(String objetConfirme, String talentConfirme) {
+        if (objetConfirme != null) {
+            for (StatHypothesis h : new StatHypothesis[]{attaque, attaqueSpe, defense, defenseSpe}) {
+                h.objetsPossibles.clear();
+                h.objetsPossibles.add(objetConfirme);
+            }
+        }
+        if (talentConfirme != null) {
+            for (StatHypothesis h : new StatHypothesis[]{attaque, attaqueSpe, defense, defenseSpe}) {
+                h.talentsPossibles.clear();
+                h.talentsPossibles.add(talentConfirme);
+            }
+        }
+    }
+
     private static StatHypothesis construireHypothese(Map<Stat, int[]> plages, Stat stat,
                                                        Set<String> objets, Set<String> talents) {
-        // La plage d'EV Smogon n'est PAS appliquee : en random battle c'est 85
-        // partout. Seules les listes d'objets/talents candidats issues de Smogon
-        // restent utiles pour amorcer l'inference.
-        return new StatHypothesis(objets, talents);
+        StatHypothesis h = new StatHypothesis(objets, talents);
+        // Les plages d'EV Smogon ne sont PAS appliquees : en random battle c'est
+        // 85 partout. Seules les listes d'objets/talents candidats sont utiles.
+        return h;
     }
 
     /**
@@ -161,5 +215,79 @@ public class ProfilAdversaire {
         Set<String> r = new HashSet<>(a);
         r.retainAll(b);
         return r;
+    }
+
+    /**
+     * Parmi les N spreads Smogon les plus populaires (déjà triés par
+     * poids), retourne le plus probable qui reste ENCORE cohérent avec
+     * les dégâts observés en combat - au lieu d'afficher systématiquement
+     * le spread #1 même après une observation qui le contredit clairement.
+     *
+     * Réutilise entièrement le narrowing déjà en place (StatHypothesis
+     * resserré par SetInferenceEngine.narrow) : un spread est "cohérent"
+     * si ses 4 EV offensifs/défensifs tombent tous dans les plages déjà
+     * resserrées par l'observation, ET si sa nature est compatible avec
+     * les stats que le narrowing a identifiées comme pouvant être
+     * boostées/neutres/baissées. Aucun nouveau mécanisme d'observation :
+     * juste une lecture, après coup, de ce que le narrowing sait déjà.
+     *
+     * Retourne null si aucun des N spreads testés ne reste cohérent
+     * (l'appelant doit alors se rabattre sur un affichage générique).
+     */
+    public SmogonDataLoader.ParsedSpread spreadPlusProbable(List<SmogonDataLoader.ParsedSpread> topSpreads, int n, Pokemon reference) {
+        int limite = Math.min(n, topSpreads.size());
+        for (int i = 0; i < limite; i++) {
+            SmogonDataLoader.ParsedSpread s = topSpreads.get(i);
+            if (spreadEstCoherent(s, reference)) return s;
+        }
+        return null;
+    }
+
+    private boolean spreadEstCoherent(SmogonDataLoader.ParsedSpread s, Pokemon reference) {
+        if (!evDansPlage(attaque, s.atkEv())) return false;
+        if (!evDansPlage(attaqueSpe, s.spaEv())) return false;
+        if (!evDansPlage(defense, s.defEv())) return false;
+        if (!evDansPlage(defenseSpe, s.spdEv())) return false;
+
+        Nature nature = ShowdownIdMapper.nature(s.natureShowdownId());
+        if (!natureCoherente(attaque, Stat.ATTAQUE, nature)) return false;
+        if (!natureCoherente(attaqueSpe, Stat.ATTAQUE_SPE, nature)) return false;
+        if (!natureCoherente(defense, Stat.DEFENSE, nature)) return false;
+        if (!natureCoherente(defenseSpe, Stat.DEFENSE_SPE, nature)) return false;
+
+        // Vitesse : cross-check contre l'ordre d'action déjà observé en
+        // combat (signal déjà collecté ailleurs, jamais exploité ici avant).
+        // Si ce spread impliquerait une vitesse INFÉRIEURE au minimum
+        // garanti par l'observation (l'adversaire a agi avant nous sans
+        // priorité, donc sa vitesse réelle est au moins celle-ci), le
+        // spread est provablement faux - il ne devine pas juste un peu
+        // moins bien, il est mathématiquement incompatible avec un fait
+        // déjà établi avec certitude.
+        if (reference != null) {
+            int vitesseMinConnue = com.tropimon.randompvp.battle.ObservationCollector
+                .getVitesseMinObservee(reference.getEspece());
+            if (vitesseMinConnue > 0) {
+                Pokemon hypothese = Pokemon.builder(reference.getEspece(), reference.getNiveau(),
+                        reference.getType1(), reference.getType2())
+                    .statBase(Stat.VITESSE, reference.getStatBase(Stat.VITESSE))
+                    .iv(Stat.VITESSE, 31)
+                    .ev(Stat.VITESSE, s.speEv())
+                    .nature(nature)
+                    .build();
+                if (hypothese.getStatCalculee(Stat.VITESSE) < vitesseMinConnue) return false;
+            }
+        }
+
+        return true;
+    }
+
+    private static boolean evDansPlage(StatHypothesis h, int ev) {
+        return ev >= h.evMin && ev <= h.evMax;
+    }
+
+    private static boolean natureCoherente(StatHypothesis h, Stat stat, Nature nature) {
+        if (nature.getStatAugmentee() == stat) return h.peutEtreBoostee;
+        if (nature.getStatDiminuee() == stat) return h.peutEtreBaissee;
+        return h.peutEtreNeutre;
     }
 }

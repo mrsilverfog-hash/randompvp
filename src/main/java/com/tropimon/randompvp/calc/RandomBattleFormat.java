@@ -3,16 +3,16 @@ package com.tropimon.randompvp.calc;
 /**
  * Constantes du format random battle de Tropimon.
  *
- * En random battle, tous les Pokémon (les tiens comme ceux de l'adversaire)
+ * En random battle, tous les Pokémon — les tiens comme ceux de l'adversaire —
  * partagent le même profil de stats : 31 IV et 85 EV dans chaque statistique,
  * nature neutre. Seul le NIVEAU varie d'un Pokémon à l'autre (typiquement
- * entre 78 et 98) — il est lu depuis Cobblemon et reste la seule inconnue
+ * entre 78 et 98) ; il est lu depuis Cobblemon et reste la seule inconnue
  * légitime du calcul de stats.
  *
- * C'est LA différence avec TropiCalc, qui doit deviner les EV/nature adverses
- * via les sets Smogon et le moteur d'inférence. Ici il n'y a rien à deviner :
- * on force ces valeurs partout, ce qui rend les stats adverses exactes plutôt
- * qu'estimées.
+ * C'est LA différence avec TropiCalc, qui doit deviner les EV et la nature
+ * adverses via les sets Smogon et le moteur d'inférence. Ici il n'y a rien à
+ * deviner : on force ces valeurs partout, ce qui rend les stats adverses
+ * exactes plutôt qu'estimées.
  */
 public final class RandomBattleFormat {
 

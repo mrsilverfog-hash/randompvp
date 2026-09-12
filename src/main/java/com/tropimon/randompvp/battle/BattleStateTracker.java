@@ -188,7 +188,8 @@ public final class BattleStateTracker {
             .statBase(Stat.ATTAQUE_SPE, statBase(forme, Stats.SPECIAL_ATTACK))
             .statBase(Stat.DEFENSE_SPE, statBase(forme, Stats.SPECIAL_DEFENCE))
             .statBase(Stat.VITESSE, statBase(forme, Stats.SPEED))
-            .poids(forme.getWeight());
+            .poids(forme.getWeight())
+            ;
 
         if (props.getAbility() != null) {
             String t = ShowdownIdMapper.talent(props.getAbility());
@@ -203,9 +204,9 @@ public final class BattleStateTracker {
             if (tera != null) builder.teraType(tera);
         }
         // Random battle : IV/EV/nature identiques pour tout le monde.
-        // On ignore délibérément props.getIvs()/getEvs()/getNature() — côté
+        // On ignore delibérément props.getIvs()/getEvs()/getNature() — côté
         // adverse ces champs sont partiels ou absents, et côté joueur ils
-        // reflètent le Pokémon stocké, pas celui généré pour le combat.
+        // refléteraient le Pokémon stocké, pas celui généré pour le combat.
         RandomBattleFormat.appliquer(builder);
 
         Pokemon pokemon = builder.build();

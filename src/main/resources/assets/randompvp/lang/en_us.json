@@ -1,4 +1,4 @@
 {
-  "category.randompvp": "RandomPvp",
-  "key.randompvp.bascule": "Toggle random battle mode"
+  "key.randompvp.toggle": "Toggle RandomPvp",
+  "key.categories.randompvp": "RandomPvp"
 }

@@ -11,6 +11,13 @@ public interface AbilityModifier {
     default void appliquerCoteDefenseur(ModifierContext ctx) {
     }
 
+    // ATTENTION - ordre de declaration significatif.
+    // Dans une interface, les champs sont initialises dans l'ordre du texte.
+    // Ces deux Set doivent etre declares AVANT REGISTRE : construireRegistre()
+    // les passe a immuniteContreCapacites(), et s'ils sont declares plus bas ils
+    // valent encore null a ce moment-la. Le modificateur capture alors un Set
+    // null et lance une NullPointerException des qu'un defenseur porte
+    // Pare-Balles ou Anti-Bruit - en plein rendu du HUD, donc crash du client.
     // Capacités à flag "ball/bomb" les plus jouées en compétitif (Pare-Balles)
     static final java.util.Set<String> CAPACITES_BALLE = java.util.Set.of(
         "shadowball", "sludgebomb", "aurasphere", "focusblast", "energyball",
@@ -404,17 +411,11 @@ public interface AbilityModifier {
         };
     }
 
-
-
     private static AbilityModifier immuniteContreCapacites(java.util.Set<String> capacitesConcernees) {
         return new AbilityModifier() {
             @Override
             public void appliquerCoteDefenseur(ModifierContext ctx) {
-                // Garde-fou : si le Set était null (ordre d'initialisation
-                // statique cassé), on ignore l'immunité au lieu de faire
-                // planter le rendu du HUD.
-                if (capacitesConcernees != null
-                        && capacitesConcernees.contains(ctx.capacite.getNom())) {
+                if (capacitesConcernees.contains(ctx.capacite.getNom())) {
                     ctx.immuniteType = true;
                 }
             }

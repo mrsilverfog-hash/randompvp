@@ -89,6 +89,12 @@ public class DamageCalculator {
 
     private DamageCalculator() {}
 
+    // Seules espèces du jeu où Protéen (Kecleon exclu, jamais joué en
+    // compétitif) ou Libéro sont un talent caché quasi-systématiquement
+    // utilisé plutôt qu'une simple option parmi d'autres.
+    private static final java.util.Set<String> ESPECES_PROTEEN_LIBERO_QUASI_CERTAIN =
+        java.util.Set.of("meowscarada", "cinderace", "greninja");
+
     public static Resultat calculer(Pokemon attaquant, Pokemon defenseur, Move capacite,
                                      Field terrain, Field.Ecrans ecransDefenseur, boolean critique) {
 
@@ -246,7 +252,10 @@ public class DamageCalculator {
         double meteo = terrain.multiplicateurMeteo(capacite.getType());
         double champTerrain = estAuSol(attaquant) ? terrain.multiplicateurTerrain(capacite.getType()) : 1.0;
         double champTerrainDef = multiplicateurTerrainDefensif(terrain, capacite, defenseur);
-        double ecrans = (!critique && ecransDefenseur != null)
+        // Infiltration : ignore Reflet/Mur Lumière/Voile Aurore de la cible,
+        // comme les critiques le font déjà
+        boolean infiltration = "Infiltration".equals(attaquant.getTalent());
+        double ecrans = (!critique && !infiltration && ecransDefenseur != null)
             ? ecransDefenseur.multiplicateur(capacite.getCategorie())
             : 1.0;
         double critMult = critique ? 1.5 : 1.0;
@@ -394,9 +403,22 @@ public class DamageCalculator {
         if (nom == null) return puissance;
 
         switch (nom) {
+            case "boltbeak", "fishiousrend" -> {
+                // Prise de Bec / Branchicrok : double puissance (170) si
+                // l'attaquant agit avant la cible (comparaison de vitesse).
+                double vitAttaquant = vitesseEnCombat(attaquant, meteo);
+                double vitDefenseur = vitesseEnCombat(defenseur, meteo);
+                if (vitAttaquant > vitDefenseur) puissance = 170;
+            }
             case "knockoff" -> {
                 // Sabotage : x1.5 si le défenseur tient un objet
                 if (defenseur.getObjet() != null) puissance = (int) (puissance * 1.5);
+            }
+            case "ragefist" -> {
+                // Poing de Colère : +50 par capacité offensive réellement
+                // subie (max 6, plafond 350) - le compteur ne reset jamais
+                // au switch, déjà géré comme tel sur l'attaquant.
+                puissance = Math.min(350, 50 + 50 * attaquant.getCoupsRageFistSubis());
             }
             case "facade" -> {
                 // Façade : x2 si brûlure, poison ou paralysie ; ignore la pénalité de brûlure
@@ -504,13 +526,13 @@ public class DamageCalculator {
         return puissance;
     }
 
-    /** Vitesse en combat : stages, Écharpe Choix, paralysie, talents météo. */
+    /** Vitesse en combat : stages, Mouchoir Choix, paralysie, talents météo. */
     public static double vitesseEnCombat(Pokemon p, Field.Meteo meteo, Field.TypeTerrain terrain) {
         double v = p.getStatCalculee(Stat.VITESSE);
         int stage = p.getStage(Stat.VITESSE);
         if (stage >= 0) v = v * (2.0 + stage) / 2.0;
         else v = v * 2.0 / (2.0 - stage);
-        if ("Écharpe Choix".equals(p.getObjet())) v *= 1.5;
+        if ("Mouchoir Choix".equals(p.getObjet())) v *= 1.5;
         // Talents doublant la vitesse sous leur météo
         String talent = p.getTalent();
         boolean soleil = meteo == Field.Meteo.SOLEIL || meteo == Field.Meteo.SOLEIL_INTENSE;
@@ -608,7 +630,7 @@ public class DamageCalculator {
         return Math.max(1, poids);
     }
 
-    private static double calculerEfficaciteType(Move capacite, Pokemon defenseur, Pokemon attaquant) {
+    public static double calculerEfficaciteType(Move capacite, Pokemon defenseur, Pokemon attaquant) {
         if (capacite.getType() == PokemonType.STELLAIRE) {
             return defenseur.isTeracristallise() ? 2.0 : 1.0;
         }
@@ -735,9 +757,21 @@ public class DamageCalculator {
     private static double calculerSTAB(Pokemon attaquant, Move capacite, ModifierContext ctx) {
         PokemonType typeCapacite = capacite.getType();
 
-        // Protéen / Libéro : l'attaquant prend le type de son attaque → STAB garanti
+        // Protéen / Libéro : l'attaquant prend le type de son attaque → STAB garanti.
+        // Depuis la Gen 9, ce déclenchement n'a lieu QU'UNE SEULE FOIS par entrée
+        // sur le terrain (sur le premier coup joué) - le Pokémon reste ensuite
+        // bloqué sur ce type jusqu'à ce qu'il sorte et revienne. Miascarade/
+        // Pyrobut/Amphinobi sont les 3 SEULES espèces où ce talent caché est
+        // quasi-systématiquement joué en compétitif : on assume le STAB garanti
+        // TANT QU'AUCUN changement de type réel n'a encore été OBSERVÉ pour ce
+        // séjour sur le terrain (isTypesModifies()) - dès qu'un coup a révélé
+        // son vrai type via TypeTracker, on arrête de deviner et on utilise ce
+        // type réel normalement (STAB seulement si le type de la capacité
+        // correspond vraiment, comme pour n'importe quel autre Pokémon).
         String talent = attaquant.getTalent();
-        boolean proteen = "Protéen".equals(talent) || "Libéro".equals(talent);
+        boolean proteen = "Protéen".equals(talent) || "Libéro".equals(talent)
+            || (!attaquant.isTypesModifies()
+                && ESPECES_PROTEEN_LIBERO_QUASI_CERTAIN.contains(attaquant.getEspece()));
 
         boolean typeOriginal = attaquant.possedeType(typeCapacite) || proteen;
 

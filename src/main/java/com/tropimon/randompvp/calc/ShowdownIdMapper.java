@@ -61,6 +61,7 @@ public final class ShowdownIdMapper {
         NATURES.put("quirky", Nature.BIZARRE);
 
         TALENTS.put("levitate", "Lévitation");
+        TALENTS.put("infiltrator", "Infiltration");
         TALENTS.put("stickyhold", "Glu");
         TALENTS.put("mindseye", "Œil Révélateur");
         TALENTS.put("dragonsmaw", "Dent de Dragon");
@@ -165,7 +166,7 @@ public final class ShowdownIdMapper {
 
         OBJETS.put("choiceband", "Bandeau Choix");
         OBJETS.put("choicespecs", "Lunettes Choix");
-        OBJETS.put("choicescarf", "Écharpe Choix");
+        OBJETS.put("choicescarf", "Mouchoir Choix");
         OBJETS.put("floatstone", "Pierrallégée");
         OBJETS.put("abilityshield", "Garde-Talent");
         OBJETS.put("loadeddice", "Dé Pipé");
@@ -176,6 +177,8 @@ public final class ShowdownIdMapper {
         OBJETS.put("eviolite", "Évoluroc");
         OBJETS.put("heavydutyboots", "Grosses Bottes");
         OBJETS.put("leftovers", "Restes");
+        OBJETS.put("weaknesspolicy", "Vulné-Assurance");
+        OBJETS.put("terrainextender", "Champ'Duit");
         OBJETS.put("rockyhelmet", "Casque Brut");
         OBJETS.put("blacksludge", "Boue Noire");
         OBJETS.put("flameorb", "Orbe Flamme");
@@ -189,7 +192,7 @@ public final class ShowdownIdMapper {
         OBJETS.put("airballoon", "Ballon");
         OBJETS.put("muscleband", "Bandeau Muscles");
         OBJETS.put("wiseglasses", "Lunettes Savantes");
-        OBJETS.put("lightclay", "Argile Pouvoir");
+        OBJETS.put("lightclay", "Lumargile");
         OBJETS.put("heatrock", "Roche Chaude");
         OBJETS.put("damprock", "Roche Humide");
         OBJETS.put("smoothrock", "Roche Lisse");

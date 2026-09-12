@@ -33,6 +33,24 @@ public final class ObservationCollector {
     private static final Map<String, ProfilAdversaire> PROFILS = new HashMap<>();
     private static final Map<String, LinkedHashSet<String>> COUPS_ADVERSAIRE = new HashMap<>();
 
+    /**
+     * Vrai dès qu'un Pokémon SAUVAGE (sans propriétaire) est détecté dans le
+     * combat en cours. Signal confirmé par observation réelle : un Pokémon
+     * sauvage apparaît comme "cobblemon.species.XXX.name" nu dans les
+     * messages de combat, jamais enveloppé dans "owned_pokemon" comme
+     * n'importe quel Pokémon de dresseur (joueur ou adversaire PvP).
+     * Réinitialisé à chaque fin de combat.
+     */
+    private static boolean combatSauvageDetecte = false;
+
+    public static boolean estCombatSauvage() {
+        return combatSauvageDetecte;
+    }
+
+    public static void signalerPokemonSauvage() {
+        combatSauvageDetecte = true;
+    }
+
     // PP consommés par l'adversaire : espèce -> (id capacité -> PP utilisés)
     private static final Map<String, Map<String, Integer>> PP_UTILISES = new HashMap<>();
     private static final Set<String> OBJETS_RETIRES = new HashSet<>();
@@ -71,9 +89,9 @@ public final class ObservationCollector {
     private static String espaceAdversaireDuTour = null;
 
     public static synchronized void signalerNouveauTour() {
-        // Une appelante peut échouer (Blabladodo sur un Pokémon réveillé) : aucun
-        // coup tiré ne suit alors. Sans ce reset, le drapeau survivrait au tour et
-        // ferait sauter à tort le décompte de PP du coup suivant.
+        // Une appelante peut échouer (Blabladodo sur un Pokémon réveillé) : sans
+        // ce reset, le drapeau survivrait au tour et ferait sauter à tort le
+        // décompte de PP de la capacité suivante.
         appelantAdversaireEnAttente = null;
 
         Pokemon joueur = BattleStateTracker.getJoueurActifDepuisEquipe();
@@ -112,6 +130,13 @@ public final class ObservationCollector {
 
         FieldTracker.nouveauTour();
 
+        // Vulné-Assurance : +2 Attaque ET +2 Attaque Spé simultanément après avoir
+        // subi un coup super efficace - signature quasi unique (seule autre source
+        // connue : Croissance sous soleil, explicitement exclue ci-dessous).
+        tenterConfirmerVulneAssurance(adversaire, joueur);
+        stageAtkAdvDebutTour = BoostTracker.getStageAdversaire(Stat.ATTAQUE);
+        stageAtkSpeAdvDebutTour = BoostTracker.getStageAdversaire(Stat.ATTAQUE_SPE);
+
         // Compteurs Toxik : +1 par tour passé empoisonné gravement (reset au switch/soin)
         if (joueur.getStatut() == Pokemon.Statut.POISON_GRAVE) compteurToxikJoueur++;
         else compteurToxikJoueur = 0;
@@ -121,6 +146,24 @@ public final class ObservationCollector {
         if (pvJoueurDebutTour >= 0 && pvAdversaireDebutTour >= 0) {
             double perteJoueur = pvJoueurDebutTour - pvJoueurMaintenant;
             double perteAdversaire = pvAdversaireDebutTour - pvAdversaireMaintenant;
+
+            // Poing de Colère : +1 coup subi (max 6) par capacité offensive
+            // qui a réellement touché - persiste toute la durée du combat.
+            // Limite acceptée : si le Clone se brise le MÊME tour que ce
+            // coup, notre état "Clone actif" reflète déjà l'après-coup (le
+            // message end.substitute arrive avant ce traitement), donc ce
+            // cas très marginal peut sous-estimer le compteur d'un coup -
+            // jamais le surestimer.
+            if (perteJoueur > 0 && coupAdversaireDuTour != null && !adversaireNAPasAttaque()
+                    && !FieldTracker.joueurAUnClone()) {
+                String esp = joueur.getEspece();
+                COUPS_RAGE_FIST_JOUEUR.merge(esp, 1, (a, b) -> Math.min(6, a + b));
+            }
+            if (perteAdversaire > 0 && coupJoueurDuTour != null && !joueurNAPasAttaque()
+                    && !FieldTracker.adversaireAUnClone()) {
+                String esp = adversaire.getEspece();
+                COUPS_RAGE_FIST_ADVERSAIRE.merge(esp, 1, (a, b) -> Math.min(6, a + b));
+            }
 
             if (perteAdversaire < -5.0 || perteJoueur < -5.0) {
                 // Soin adverse de ~1/16 sans switch ni capacité de soin : Restes confirmés
@@ -174,7 +217,26 @@ public final class ObservationCollector {
                 }
             }
 
-            // Inférence de vitesse : l'adversaire a agi en premier avec des coups non prioritaires
+            // Détection Orbe Vie : tour "propre" où l'adversaire attaque
+            // (dégâts, pas statut, pas de recul propre à la capacité) et
+            // perd ~10% de ses PV max le même tour, sans autre source
+            // possible (statut, Salaison, Vampigraine, sable non-immunisé,
+            // dégâts du joueur qui viendraient troubler la mesure).
+            if (coupAdversaireDuTour != null
+                    && !adversaireNAPasAttaque()
+                    && !com.tropimon.randompvp.calc.MoveFlags.aRecul(coupAdversaireDuTour.showdownId())
+                    && perteAdversaire >= 8.0 && perteAdversaire <= 12.0
+                    && (coupJoueurDuTour == null || joueurNAPasAttaque())
+                    && adversaire.getStatut() == Pokemon.Statut.AUCUN
+                    && !adversaireVampigraine
+                    && !adversaireSalaison
+                    && !OBJETS_CONFIRMES.containsKey(adversaire.getEspece())
+                    && !OBJETS_RETIRES.contains(adversaire.getEspece())
+                    && (FieldTracker.construireField().getMeteo() != Field.Meteo.SABLE
+                        || immuniseSableSimple(adversaire))) {
+                OBJETS_CONFIRMES.put(adversaire.getEspece(), "Orbe Vie");
+            }
+
             if (Boolean.TRUE.equals(adversaireAAgiEnPremier)
                     && coupJoueurDuTour != null && coupAdversaireDuTour != null
                     && !COUPS_PRIORITAIRES.contains(coupJoueurDuTour.showdownId())
@@ -225,21 +287,19 @@ public final class ObservationCollector {
             coupVerrouAdversaire = coup.showdownId();
             Pokemon adversaire = BattleStateTracker.getAdversaireActif();
             if (adversaire != null) {
-                // Ce coup a-t-il été TIRÉ par une appelante jouée juste avant ?
+                // Cette capacité a-t-elle été TIRÉE par une appelante jouée juste avant ?
                 String appelant = appelantAdversaireEnAttente;
                 appelantAdversaireEnAttente = null;
                 boolean coupTire = appelant != null;
 
-                // Un coup tiré par Blabladodo appartient bien au moveset adverse
-                // et mérite d'être retenu ; un coup de Métronome, non.
+                // Une capacité tirée par Blabladodo appartient bien au moveset
+                // adverse et mérite d'être retenue ; celle d'un Métronome, non.
                 if (!coupTire || APPELANTS_MOVESET_REEL.contains(appelant)) {
-                    COUPS_ADVERSAIRE
-                        .computeIfAbsent(adversaire.getEspece(), k -> new LinkedHashSet<>())
-                        .add(coup.showdownId());
+                    ajouterCapaciteAdversaire(adversaire.getEspece(), coup.showdownId(), true);
                 }
 
-                // Comptage des PP. Un coup tiré n'en consomme aucun : seule
-                // l'appelante a été décomptée, au message précédent.
+                // Comptage des PP. Une capacité tirée n'en consomme aucune :
+                // seule l'appelante a été décomptée, au message précédent.
                 if (!coupTire) {
                     // Pression (talent du joueur) ajoute 1 PP, mais seulement si
                     // la capacité CIBLE le Pokémon qui a Pression (Abri, Soin,
@@ -255,8 +315,6 @@ public final class ObservationCollector {
                         .computeIfAbsent(adversaire.getEspece(), k -> new HashMap<>())
                         .merge(coup.showdownId(), cout, Integer::sum);
 
-                    // Si c'est une appelante, le prochain coup du même camp sera
-                    // le coup tiré et ne devra rien coûter.
                     if (COUPS_APPELANTS.contains(coup.showdownId())) {
                         appelantAdversaireEnAttente = coup.showdownId();
                     }
@@ -278,7 +336,7 @@ public final class ObservationCollector {
         int stage = BoostTracker.getStageJoueur(Stat.VITESSE);
         if (stage >= 0) v = v * (2.0 + stage) / 2.0;
         else v = v * 2.0 / (2.0 - stage);
-        if ("Écharpe Choix".equals(joueur.getObjet())) v *= 1.5;
+        if ("Mouchoir Choix".equals(joueur.getObjet())) v *= 1.5;
         if (joueur.getStatut() == Pokemon.Statut.PARALYSIE) v *= 0.5;
         return (int) Math.floor(v);
     }
@@ -296,11 +354,17 @@ public final class ObservationCollector {
         com.tropimon.randompvp.calc.Move capacite = convertirCapacite(template);
         if (capacite == null || capacite.estCapaciteDeStatut()) return;
 
+        String objetConfirmeDejaSu = OBJETS_CONFIRMES.get(adversaire.getEspece());
+        String talentConfirmeDejaSu = TALENTS_CONFIRMES.get(adversaire.getEspece());
         ProfilAdversaire profil = PROFILS.computeIfAbsent(adversaire.getEspece(), k -> {
             Set<String> talentsReels = getTalentsReelsEspece(adversaire);
             SmogonDataLoader.SmogonPokemonData smogon = SmogonDataLoader.getDonnees(adversaire.getEspece());
-            return new ProfilAdversaire(talentsReels, smogon);
+            return new ProfilAdversaire(talentsReels, smogon, objetConfirmeDejaSu, talentConfirmeDejaSu);
         });
+        // Une confirmation arrivée APRÈS la première construction du profil
+        // (le cas le plus fréquent) doit quand même verrouiller les
+        // candidats, sans perdre les plages EV déjà resserrées.
+        profil.verrouillerSiConfirme(objetConfirmeDejaSu, talentConfirmeDejaSu);
 
         Field terrainNeutre = FieldTracker.construireField();
         double observeMin = Math.max(0, perte - TOLERANCE_POURCENT);
@@ -390,6 +454,8 @@ public final class ObservationCollector {
         ProfilAdversaire profil = PROFILS.get(espece);
         SmogonDataLoader.SmogonPokemonData smogon = SmogonDataLoader.getDonnees(espece);
         boolean objetRetire = OBJETS_RETIRES.contains(espece);
+        tenterConfirmerEcharpeChoix(espece, adversaireBase);
+        tenterConfirmerEvoluroc(espece, smogon);
 
         Pokemon.Builder b = Pokemon.builder(espece, adversaireBase.getNiveau(),
             adversaireBase.getType1(), adversaireBase.getType2());
@@ -403,9 +469,9 @@ public final class ObservationCollector {
         if (scout != null && !ESPECES_SCOUT_FUSIONNEES.contains(espece)) {
             ESPECES_SCOUT_FUSIONNEES.add(espece);
             if (!scout.capacites.isEmpty()) {
-                COUPS_ADVERSAIRE
-                    .computeIfAbsent(espece, k -> new LinkedHashSet<>())
-                    .addAll(scout.capacites);
+                for (String capaciteScoutee : scout.capacites) {
+                    ajouterCapaciteAdversaire(espece, capaciteScoutee, false);
+                }
             }
             if (scout.chipTalent) TALENTS_CHIP_CONFIRMES.add(espece);
         }
@@ -414,7 +480,7 @@ public final class ObservationCollector {
 
         // Random battle : les EV et la nature du set Smogon ne s'appliquent PAS
         // (spreads compétitifs 252/4 avec nature boostante, alors que le format
-        // impose 85 partout et neutre). On ne garde de Smogon que l'objet et le
+        // impose 85 partout et neutre). De Smogon on ne garde que l'objet et le
         // talent probables, qui eux restent variables en random battle.
         if (smogon != null) {
             if (!objetRetire && objetConfirme == null && !smogon.topItemsShowdownId().isEmpty()) {
@@ -439,7 +505,14 @@ public final class ObservationCollector {
                 if (objetEstime == null) objetEstime = extraireObjetUnique(profil.attaqueSpe);
                 if (objetEstime == null) objetEstime = extraireObjetUnique(profil.defense);
                 if (objetEstime == null) objetEstime = extraireObjetUnique(profil.defenseSpe);
-                if (objetEstime != null) b.objet(objetEstime);
+                if (objetEstime != null) {
+                    b.objet(objetEstime);
+                    // Rendu visible ("Objet confirmé"), pas juste appliqué
+                    // silencieusement au calcul : le narrowing a déjà éliminé
+                    // tous les autres candidats testés, même niveau de
+                    // confiance que le calcul qui s'en sert depuis toujours.
+                    OBJETS_CONFIRMES.put(espece, objetEstime);
+                }
             }
 
             String talentEstime = extraireTalentUnique(profil.attaque);
@@ -496,7 +569,7 @@ public final class ObservationCollector {
         // Dernier mot sur les stats : 31 IV / 85 EV / nature neutre, quoi qu'il
         // se soit passé au-dessus. Le niveau, lui, vient de adversaireBase et
         // reste celui lu en combat.
-        com.tropimon.randompvp.calc.RandomBattleFormat.appliquer(b);
+        RandomBattleFormat.appliquer(b);
 
         Pokemon p = b.build();
 
@@ -504,6 +577,7 @@ public final class ObservationCollector {
             ? (double) adversaireBase.getPvActuels() / adversaireBase.getPvMax() : 1.0;
         p.setPvActuels((int) Math.round(fractionPv * p.getPvMax()));
         p.setStatut(adversaireBase.getStatut());
+        p.setCoupsRageFistSubis(getCoupsRageFistAdversaire(espece));
 
         for (Stat s : Stat.values()) {
             if (s != Stat.PV) {
@@ -517,6 +591,114 @@ public final class ObservationCollector {
     // appliquerHypothese/trouverNatureBoostant supprimés : en random battle les
     // EV et la nature sont connus, il n'y a plus d'hypothèse de stat à appliquer.
 
+    private static void tenterConfirmerEcharpeChoix(String espece, Pokemon adversaireBase) {
+        if (OBJETS_CONFIRMES.containsKey(espece) || OBJETS_RETIRES.contains(espece)) return;
+        int vitesseMinObservee = getVitesseMinObservee(espece);
+        if (vitesseMinObservee <= 0) return;
+
+        try {
+            Set<String> talentsPossibles = getTalentsReelsEspece(adversaireBase);
+            com.tropimon.randompvp.calc.Field.Meteo meteoActuelle =
+                FieldTracker.construireField().getMeteo();
+
+            double meilleureVitesse = 0;
+            String[] talentsAEssayer = {null, "Chlorophylle", "Glissade", "Baigne Sable", "Chasse-Neige"};
+            for (String talent : talentsAEssayer) {
+                if (talent != null && (talentsPossibles == null || !talentsPossibles.contains(talent))) continue;
+                Pokemon.Builder b = Pokemon.builder(espece, adversaireBase.getNiveau(),
+                        adversaireBase.getType1(), adversaireBase.getType2())
+                    .statBase(Stat.VITESSE, adversaireBase.getStatBase(Stat.VITESSE))
+                    .iv(Stat.VITESSE, RandomBattleFormat.IV)
+                    .ev(Stat.VITESSE, RandomBattleFormat.EV)
+                    .nature(RandomBattleFormat.NATURE);
+                if (talent != null) b.talent(talent);
+                double v = com.tropimon.randompvp.calc.DamageCalculator.vitesseEnCombat(b.build(), meteoActuelle);
+                meilleureVitesse = Math.max(meilleureVitesse, v);
+            }
+            // Pied Véloce seulement si un statut est réellement actif
+            // maintenant (sinon le talent ne ferait rien)
+            if (talentsPossibles != null && talentsPossibles.contains("Pied Véloce")
+                    && adversaireBase.getStatut() != Pokemon.Statut.AUCUN) {
+                Pokemon avecPiedVeloce = Pokemon.builder(espece, adversaireBase.getNiveau(),
+                        adversaireBase.getType1(), adversaireBase.getType2())
+                    .statBase(Stat.VITESSE, adversaireBase.getStatBase(Stat.VITESSE))
+                    .iv(Stat.VITESSE, RandomBattleFormat.IV)
+                    .ev(Stat.VITESSE, RandomBattleFormat.EV)
+                    .nature(RandomBattleFormat.NATURE)
+                    .talent("Pied Véloce")
+                    .build();
+                avecPiedVeloce.setStatut(adversaireBase.getStatut());
+                double v = com.tropimon.randompvp.calc.DamageCalculator.vitesseEnCombat(avecPiedVeloce, meteoActuelle);
+                meilleureVitesse = Math.max(meilleureVitesse, v);
+            }
+
+            if (vitesseMinObservee > meilleureVitesse) {
+                OBJETS_CONFIRMES.put(espece, "Mouchoir Choix");
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    /**
+     * Confirme Évoluroc si Smogon montre une dominance TRÈS forte (≥80%)
+     * pour cet objet sur cette espèce - PAS une preuve comportementale
+     * comme les autres détections de ce fichier, mais une quasi-certitude
+     * statistique (ex: Porygon2 joue Évoluroc depuis plus d'une décennie
+     * à quasiment 100% des cas). Un tel niveau de dominance n'existe en
+     * pratique que pour les objets quasi-obligatoires sur une espèce
+     * précise - le risque de faux positif est donc faible, mais reste
+     * d'une nature différente d'une observation directe.
+     */
+    /**
+     * Confirme Évoluroc si Smogon le montre comme objet n°1 pour cette
+     * espèce, avec un seuil de dominance plus permissif (50%) que pour un
+     * objet générique - Évoluroc n'a STRICTEMENT AUCUN EFFET sur un
+     * Pokémon totalement évolué, donc le simple fait qu'il soit l'objet
+     * le plus joué sur une espèce est déjà auto-validant : aucun joueur
+     * sensé ne le porterait s'il n'apportait rien. Couvre les murs NFE
+     * moins extrêmes que Porygon2 (Cerfrousse, Téraclope...) où l'usage
+     * peut être dominant sans dépasser 80%.
+     */
+    /**
+     * Confirme Vulné-Assurance si l'adversaire vient de gagner EXACTEMENT +2
+     * Attaque ET +2 Attaque Spé simultanément le même tour, juste après avoir
+     * subi un coup super efficace du joueur. Ce double-boost précis n'a qu'une
+     * seule autre source connue en jeu (Croissance sous soleil), explicitement
+     * exclue en vérifiant que l'adversaire n'a pas lui-même joué cette capacité
+     * ce tour. Ne couvre pas le cas Contrary (-2/-2 au lieu de +2/+2), plus rare.
+     */
+    private static void tenterConfirmerVulneAssurance(Pokemon adversaire, Pokemon joueur) {
+        if (OBJETS_CONFIRMES.containsKey(adversaire.getEspece())
+                || OBJETS_RETIRES.contains(adversaire.getEspece())) return;
+        if (coupJoueurDuTour == null || joueurNAPasAttaque()) return;
+        if (coupAdversaireDuTour != null && "growth".equals(coupAdversaireDuTour.showdownId())) return;
+
+        int deltaAtk = BoostTracker.getStageAdversaire(Stat.ATTAQUE) - stageAtkAdvDebutTour;
+        int deltaAtkSpe = BoostTracker.getStageAdversaire(Stat.ATTAQUE_SPE) - stageAtkSpeAdvDebutTour;
+        if (deltaAtk != 2 || deltaAtkSpe != 2) return;
+
+        try {
+            MoveTemplate template = Moves.INSTANCE.getByName(coupJoueurDuTour.showdownId());
+            if (template == null) return;
+            com.tropimon.randompvp.calc.Move capacite = convertirCapacite(template);
+            if (capacite == null) return;
+            double efficacite = DamageCalculator.calculerEfficaciteType(capacite, adversaire, joueur);
+            if (efficacite > 1.0) {
+                OBJETS_CONFIRMES.put(adversaire.getEspece(), "Vulné-Assurance");
+            }
+        } catch (Exception ignored) {
+        }
+    }
+
+    private static void tenterConfirmerEvoluroc(String espece, SmogonDataLoader.SmogonPokemonData smogon) {
+        if (smogon == null || smogon.topItemsShowdownId().isEmpty()) return;
+        if (OBJETS_CONFIRMES.containsKey(espece) || OBJETS_RETIRES.contains(espece)) return;
+        String topObjet = ShowdownIdMapper.objet(smogon.topItemsShowdownId().get(0));
+        if ("Évoluroc".equals(topObjet) && smogon.topItemUsageFraction() >= 0.50) {
+            OBJETS_CONFIRMES.put(espece, "Évoluroc");
+        }
+    }
+
     private static String extraireObjetUnique(StatHypothesis hyp) {
         Set<String> s = new HashSet<>(hyp.objetsPossibles);
         s.remove(StatHypothesis.AUCUN);
@@ -527,6 +709,25 @@ public final class ObservationCollector {
         Set<String> s = new HashSet<>(hyp.talentsPossibles);
         s.remove(StatHypothesis.AUCUN);
         return s.size() == 1 ? s.iterator().next() : null;
+    }
+
+    /**
+     * Ajoute une capacité connue pour cette espèce, en garantissant de
+     * NE JAMAIS dépasser 4 (un vrai Pokémon n'en connaît jamais plus).
+     * Une observation RÉELLE de ce combat (certaine) fait toujours de la
+     * place en retirant la plus ancienne entrée si nécessaire ; une
+     * entrée de scouting ancien (potentiellement obsolète, le set adverse
+     * a pu changer entre deux combats) n'est jamais ajoutée si ça
+     * dépasserait 4.
+     */
+    private static void ajouterCapaciteAdversaire(String espece, String capaciteId, boolean estObservationReelle) {
+        LinkedHashSet<String> ensemble = COUPS_ADVERSAIRE.computeIfAbsent(espece, k -> new LinkedHashSet<>());
+        if (ensemble.contains(capaciteId)) return;
+        if (ensemble.size() >= 4) {
+            if (!estObservationReelle) return;
+            ensemble.remove(ensemble.iterator().next());
+        }
+        ensemble.add(capaciteId);
     }
 
     public static List<MoveTemplate> getCoupsAdversaireReveles(String espece) {
@@ -611,7 +812,7 @@ public final class ObservationCollector {
         }
     }
 
-    private static Boolean determinerAttaquant(String proprietaire) {
+    public static Boolean determinerAttaquant(String proprietaire) {
         if (proprietaire == null) return null;
         var joueurMc = MinecraftClient.getInstance().player;
         if (joueurMc == null) return null;
@@ -631,50 +832,18 @@ public final class ObservationCollector {
      * Capacités qui ne visent PAS l'adversaire : soins et boosts sur soi,
      * protections, pièges et écrans de terrain, météo, terrains, salles.
      *
-     * Pression ne s'applique qu'aux capacités qui ciblent le porteur du talent.
-     * On s'appuie sur cette liste explicite plutôt que sur le champ target de
+     * Pression ne s'applique qu'aux capacités ciblant le porteur du talent. On
+     * s'appuie sur cette liste explicite plutôt que sur le seul champ target de
      * Cobblemon : String.valueOf(t.getTarget()) ne renvoie pas toujours un
-     * libellé exploitable, et quand la reconnaissance échoue le code retombait
-     * sur "on suppose offensive" — d'où le PP en trop compté sur Atterrissage.
-     * Une donnée qu'on maîtrise vaut mieux ici qu'une API dont le format
-     * n'est pas garanti.
+     * libellé exploitable, et quand la reconnaissance échouait le code retombait
+     * sur "on suppose offensive" — d'où le PP compté en trop sur Atterrissage.
      */
-    /**
-     * Capacités qui en déclenchent une autre. Seule l'appelante consomme des PP :
-     * un Ronflex qui sort Repos via Blabladodo dépense 1 PP de Blabladodo et
-     * zéro PP de Repos. Le message Cobblemon "used_move" est pourtant émis pour
-     * les deux, d'où le double comptage.
-     *
-     * Blabladodo est à part : la capacité tirée fait réellement partie du moveset
-     * adverse, donc elle reste enregistrée dans COUPS_ADVERSAIRE (information
-     * légitime). Pour Métronome ou Copie, la capacité tirée n'appartient pas à
-     * l'adversaire et ne doit pas être retenue comme sienne.
-     */
-    private static final java.util.Set<String> COUPS_APPELANTS = java.util.Set.of(
-        "sleeptalk", "metronome", "copycat", "naturepower", "assist",
-        "mirrormove", "mefirst"
-    );
-
-    /** Capacités appelantes dont le coup tiré appartient bien à l'adversaire. */
-    private static final java.util.Set<String> APPELANTS_MOVESET_REEL = java.util.Set.of(
-        "sleeptalk"
-    );
-
-    /**
-     * Non-null quand la capacité adverse précédente était une appelante : le
-     * prochain "used_move" du même camp est alors le coup tiré, pas un coup joué.
-     */
-    private static String appelantAdversaireEnAttente = null;
-
     private static final java.util.Set<String> COUPS_SANS_CIBLE_ADVERSE = java.util.Set.of(
-        // Soins sur soi
         "roost", "recover", "softboiled", "slackoff", "rest", "synthesis",
         "moonlight", "morningsun", "shoreup", "milkdrink", "healorder",
         "purify", "junglehealing", "lifedew", "strengthsap",
-        // Protections
         "protect", "detect", "spikyshield", "banefulbunker", "silktrap",
         "burningbulwark", "obstruct", "kingsshield", "maxguard", "endure",
-        // Boosts et statuts sur soi
         "swordsdance", "nastyplot", "calmmind", "bulkup", "dragondance",
         "quiverdance", "irondefense", "agility", "workup", "shellsmash",
         "cosmicpower", "amnesia", "barrier", "acidarmor", "harden", "withdraw",
@@ -683,18 +852,36 @@ public final class ObservationCollector {
         "magnetrise", "autotomize", "stockpile", "swallow", "bellydrum",
         "substitute", "refresh", "recycle", "tidyup", "victorydance",
         "takeheart", "clangoroussoul", "noretreat", "filletaway",
-        // Souhaits et relais
         "wish", "healingwish", "lunardance", "batonpass", "teleport",
         "healbell", "aromatherapy", "sleeptalk",
-        // Pièges et écrans de terrain
         "stealthrock", "spikes", "toxicspikes", "stickyweb", "reflect",
         "lightscreen", "auroraveil", "tailwind", "safeguard", "mist",
         "luckychant", "craftyshield", "matblock", "quickguard", "wideguard",
-        // Météo, terrains, salles
         "sunnyday", "raindance", "sandstorm", "hail", "snowscape", "chillyreception",
         "electricterrain", "grassyterrain", "psychicterrain", "mistyterrain",
         "trickroom", "magicroom", "wonderroom", "gravity"
     );
+
+    /**
+     * Capacités qui en déclenchent une autre. Seule l'appelante consomme des PP :
+     * un Ronflex qui sort Repos via Blabladodo dépense 1 PP de Blabladodo et zéro
+     * de Repos, alors que Cobblemon émet un message "used_move" pour les deux.
+     */
+    private static final java.util.Set<String> COUPS_APPELANTS = java.util.Set.of(
+        "sleeptalk", "metronome", "copycat", "naturepower", "assist",
+        "mirrormove", "mefirst"
+    );
+
+    /** Appelantes dont la capacité tirée appartient bien au moveset adverse. */
+    private static final java.util.Set<String> APPELANTS_MOVESET_REEL = java.util.Set.of(
+        "sleeptalk"
+    );
+
+    /**
+     * Non-null quand la capacité adverse précédente était une appelante : le
+     * prochain "used_move" du même camp est alors la capacité tirée.
+     */
+    private static String appelantAdversaireEnAttente = null;
 
     /**
      * Vrai si la capacité cible un Pokémon adverse (condition d'application de Pression).
@@ -704,17 +891,13 @@ public final class ObservationCollector {
         if (moveId == null) return true;
         if (COUPS_SANS_CIBLE_ADVERSE.contains(moveId)) return false;
 
-        // Secondaire : le champ target de Cobblemon, quand il est exploitable.
-        try {
-            MoveTemplate t = Moves.INSTANCE.getByName(moveId);
-            if (t == null) return true; // inconnue : on suppose offensive
-            String cible = String.valueOf(t.getTarget()).toLowerCase();
-            if (cible.equals("all")) return false;          // météo, Champ Psychique...
-            if (cible.contains("self")) return false;       // Abri, Soin, Danse Lames...
-            if (cible.contains("ally") || cible.contains("allies")) return false;
-            if (cible.contains("side")) return false;       // Piège de Roc, Picots, écrans...
-        } catch (Throwable ignored) {
-        }
+        MoveTemplate t = Moves.INSTANCE.getByName(moveId);
+        if (t == null) return true; // inconnue : on suppose offensive
+        String cible = String.valueOf(t.getTarget()).toLowerCase();
+        if (cible.equals("all")) return false;          // météo, Champ Psychique...
+        if (cible.contains("self")) return false;       // Abri, Soin, Danse Lames...
+        if (cible.contains("ally") || cible.contains("allies")) return false;
+        if (cible.contains("side")) return false;       // Piège de Roc, Picots, écrans...
         return true;
     }
 
@@ -750,6 +933,17 @@ public final class ObservationCollector {
         Map<Stat, Double> m = FACTEURS.computeIfAbsent(espece, k -> new HashMap<>());
         Double actuel = m.get(stat);
         m.put(stat, actuel == null ? ratio : actuel * 0.4 + ratio * 0.6);
+    }
+
+    /**
+     * Confirmation directe d'un objet par espèce, sans passer par un nom de
+     * propriétaire - utilisée quand l'objet est déduit d'un comportement
+     * observé (ex: un écran qui dure plus longtemps que possible sans
+     * Lumargile) plutôt que d'un message explicite du jeu.
+     */
+    public static void confirmerObjetDirect(String espece, String objetFr) {
+        if (espece == null || objetFr == null) return;
+        OBJETS_CONFIRMES.put(espece, objetFr);
     }
 
     /** Vrai si l'objet de cette espèce est un fait observé (soin vu, ou retiré par Sabotage). */
@@ -854,6 +1048,24 @@ public final class ObservationCollector {
     private static int compteurToxikJoueur = 0;
     private static int compteurToxikAdversaire = 0;
 
+    // Snapshot des stages Attaque/Attaque Spé adverses au début du tour précédent,
+    // pour détecter un gain de +2/+2 simultané (Vulné-Assurance) précisément CE tour.
+    private static int stageAtkAdvDebutTour = 0;
+    private static int stageAtkSpeAdvDebutTour = 0;
+
+    // Poing de Colère : persiste PAR ESPÈCE pour toute la durée du combat,
+    // ne reset jamais au switch (contrairement à tout le reste ci-dessus).
+    private static final Map<String, Integer> COUPS_RAGE_FIST_JOUEUR = new HashMap<>();
+    private static final Map<String, Integer> COUPS_RAGE_FIST_ADVERSAIRE = new HashMap<>();
+
+    public static int getCoupsRageFistJoueur(String espece) {
+        return COUPS_RAGE_FIST_JOUEUR.getOrDefault(espece, 0);
+    }
+
+    public static int getCoupsRageFistAdversaire(String espece) {
+        return COUPS_RAGE_FIST_ADVERSAIRE.getOrDefault(espece, 0);
+    }
+
     public static boolean isJoueurSalaison() { return joueurSalaison; }
     public static boolean isJoueurVampigraine() { return joueurVampigraine; }
     public static boolean isAdversaireSalaison() { return adversaireSalaison; }
@@ -890,7 +1102,7 @@ public final class ObservationCollector {
             double mult = stageJoueur >= 0 ? (2.0 + stageJoueur) / 2.0 : 2.0 / (2.0 - stageJoueur);
             vitesseJoueurReelle = (int) (vitesseJoueurReelle * mult);
             if (vitesseMaxSansObjet < vitesseJoueurReelle) {
-                OBJETS_CONFIRMES.put(espece, "Écharpe Choix");
+                OBJETS_CONFIRMES.put(espece, "Mouchoir Choix");
             }
             return;
         }
@@ -950,6 +1162,12 @@ public final class ObservationCollector {
         return t != null && "status".equalsIgnoreCase(String.valueOf(t.getDamageCategory().getName()));
     }
 
+    private static boolean joueurNAPasAttaque() {
+        if (coupJoueurDuTour == null) return true;
+        MoveTemplate t = Moves.INSTANCE.getByName(coupJoueurDuTour.showdownId());
+        return t != null && "status".equalsIgnoreCase(String.valueOf(t.getDamageCategory().getName()));
+    }
+
     private static boolean immuniseSableSimple(Pokemon p) {
         return p.getType1() == com.tropimon.randompvp.calc.PokemonType.ROCHE
             || p.getType1() == com.tropimon.randompvp.calc.PokemonType.SOL
@@ -960,6 +1178,8 @@ public final class ObservationCollector {
     }
 
     public static void reinitialiser() {
+        combatSauvageDetecte = false;
+
         // Persister les faits du combat avant de tout effacer
         if (nomAdversaireCourant != null) {
             Set<String> especes = new HashSet<>();
@@ -984,6 +1204,7 @@ public final class ObservationCollector {
         PROFILS.clear();
         COUPS_ADVERSAIRE.clear();
         PP_UTILISES.clear();
+        appelantAdversaireEnAttente = null;
         OBJETS_CONFIRMES.clear();
         TALENTS_CHIP_CONFIRMES.clear();
         TALENTS_CONFIRMES.clear();
@@ -994,10 +1215,11 @@ public final class ObservationCollector {
         adversaireSalaison = false;
         compteurToxikJoueur = 0;
         compteurToxikAdversaire = 0;
+        COUPS_RAGE_FIST_JOUEUR.clear();
+        COUPS_RAGE_FIST_ADVERSAIRE.clear();
         especeJoueurSuivie = null;
         OBJETS_RETIRES.clear();
         VITESSES_MIN_OBSERVEES.clear();
-        appelantAdversaireEnAttente = null;
         BoostTracker.reinitialiser();
         TypeTracker.reinitialiser();
         FieldTracker.reinitialiser();

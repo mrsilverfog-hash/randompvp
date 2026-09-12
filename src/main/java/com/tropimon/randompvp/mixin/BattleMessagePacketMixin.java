@@ -27,10 +27,8 @@ public class BattleMessagePacketMixin {
             if (packet == null) {
                 return;
             }
-            if (!com.tropimon.randompvp.battle.RandomBattleGate.estActif()) {
-                return;
-            }
-            if (MoveUseTracker.dejaTraite(packet)) {
+            // Mod desactive : on ne lit meme pas les messages de combat.
+            if (!com.tropimon.randompvp.ModToggle.estActif()) {
                 return;
             }
             for (Text message : packet.getMessages()) {

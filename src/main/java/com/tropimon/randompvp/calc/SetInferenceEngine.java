@@ -8,7 +8,7 @@ public final class SetInferenceEngine {
     }
 
     public static final Set<String> OBJETS_OFFENSIFS = Set.of(
-        "Bandeau Choix", "Lunettes Choix", "Écharpe Choix", "Orbe Vie", "Ceinture Pro",
+        "Bandeau Choix", "Lunettes Choix", "Mouchoir Choix", "Orbe Vie", "Ceinture Pro",
         "Bandeau Muscles", "Lunettes Savantes", "Gant de Boxe"
     );
 
@@ -17,7 +17,8 @@ public final class SetInferenceEngine {
         "Mâchoire Brute", "Force Sable", "Verres Teintés", "Sans Limite", "Télécharge",
         "Coloforce", "Force Pure", "Griffe Dure", "Rage Poison", "Rage Brûlure",
         "Pouls Orichalque", "Moteur Hadron", "Dent de Dragon", "Œil Révélateur",
-        "Aquabulle", "Porte-Roche", "Seigneur Suprême", "Tranchant", "Transistor"
+        "Aquabulle", "Porte-Roche", "Seigneur Suprême", "Tranchant", "Transistor",
+        "Infiltration"
     );
 
     public static final Set<String> OBJETS_DEFENSIFS = Set.of(
@@ -48,8 +49,8 @@ public final class SetInferenceEngine {
 
         // Random battle : les EV (85) et la nature (neutre) sont connus, il n'y a
         // rien a enumerer de ce cote. L'inference ne fait plus varier que l'objet
-        // et le talent — ce qui la rend nettement plus tranchante : tout ecart de
-        // degats residuel ne peut plus venir que de l'un des deux.
+        // et le talent — ce qui la rend plus tranchante : tout ecart de degats
+        // residuel ne peut plus venir que de l'un des deux.
         for (String objet : avecAucun(objetsCandidats)) {
             for (String talent : avecAucun(talentsCandidats)) {
 
@@ -77,38 +78,10 @@ public final class SetInferenceEngine {
 
         if (!auMoinsUneCombinaisonValide) return;
 
-        // evMin/evMax et les drapeaux de nature ne sont plus mis a jour :
-        // ils restent fixes a 85 / neutre pour toute la duree du combat.
+        // evMin/evMax et les drapeaux de nature ne bougent plus : fixes a 85/neutre.
         hypothese.objetsPossibles.retainAll(nouveauxObjets);
         hypothese.talentsPossibles.retainAll(nouveauxTalents);
         hypothese.nombreObservations++;
-    }
-
-    private static Pokemon construirePokemonHypothetique(Pokemon base, String objet, String talent) {
-        Pokemon.Builder b = Pokemon.builder(base.getEspece(), base.getNiveau(), base.getType1(), base.getType2())
-            .statBase(Stat.PV, base.getStatBase(Stat.PV))
-            .statBase(Stat.ATTAQUE, base.getStatBase(Stat.ATTAQUE))
-            .statBase(Stat.DEFENSE, base.getStatBase(Stat.DEFENSE))
-            .statBase(Stat.ATTAQUE_SPE, base.getStatBase(Stat.ATTAQUE_SPE))
-            .statBase(Stat.DEFENSE_SPE, base.getStatBase(Stat.DEFENSE_SPE))
-            .statBase(Stat.VITESSE, base.getStatBase(Stat.VITESSE))
-            .teraType(base.getTeraType())
-            .teracristallise(base.isTeracristallise());
-
-        // 31 IV / 85 EV partout / nature neutre : les parametres ev et
-        // natureBoost sont volontairement ignores, ils n'ont plus de sens ici.
-        RandomBattleFormat.appliquer(b);
-
-        if (!StatHypothesis.AUCUN.equals(objet)) b.objet(objet);
-        if (!StatHypothesis.AUCUN.equals(talent)) b.talent(talent);
-
-        Pokemon p = b.build();
-        p.setStatut(base.getStatut());
-        p.setPvActuels(base.getPvActuels());
-        for (Stat s : Stat.values()) {
-            if (s != Stat.PV) p.setStage(s, base.getStage(s));
-        }
-        return p;
     }
 
     private static java.util.Set<String> avecAucun(Set<String> base) {

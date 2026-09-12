@@ -32,14 +32,14 @@ public final class SwitchOverlayRenderer {
     private static final int COULEUR_DANGER = 0xFF8800;
     private static final int COULEUR_REVELE = 0x55FF55;
     private static final int COULEUR_FOND = 0xE0100010;
-    private static final int COULEUR_BORDURE = 0xFF5000FF;
+    private static final int COULEUR_BORDURE = 0xFFE8B84B;   // doré, cohérent avec le panneau PvP et le HUD principal
 
     private SwitchOverlayRenderer() {
     }
 
     public static void render(BattleSwitchPokemonSelection ecran, DrawContext context, int mouseX, int mouseY) {
-        if (!com.tropimon.randompvp.battle.RandomBattleGate.estActif()) return;
-
+        if (!com.tropimon.randompvp.ModToggle.estActif()) return;
+        if (ObservationCollector.estCombatSauvage()) return;
         BattleSwitchPokemonSelection.SwitchTile survolee = null;
         for (BattleSwitchPokemonSelection.SwitchTile tile : ecran.getTiles()) {
             if (tile.isHovered(mouseX, mouseY)) {
@@ -266,7 +266,7 @@ public final class SwitchOverlayRenderer {
         // Sans stages (candidat qui rentre) : vitesse de base + objet + statut + météo
         Pokemon copie = p;
         double v = copie.getStatCalculee(Stat.VITESSE);
-        if ("Écharpe Choix".equals(copie.getObjet())) v *= 1.5;
+        if ("Mouchoir Choix".equals(copie.getObjet())) v *= 1.5;
         String talent = copie.getTalent();
         var meteo = FieldTracker.construireField().getMeteo();
         boolean soleil = meteo == com.tropimon.randompvp.calc.Field.Meteo.SOLEIL
