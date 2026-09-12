@@ -10,6 +10,7 @@ import com.tropimon.randompvp.calc.Nature;
 import com.tropimon.randompvp.calc.Pokemon;
 import com.tropimon.randompvp.calc.PokemonType;
 import com.tropimon.randompvp.calc.ProfilAdversaire;
+import com.tropimon.randompvp.calc.RandomBattleFormat;
 import com.tropimon.randompvp.calc.ShowdownIdMapper;
 import com.tropimon.randompvp.calc.SmogonDataLoader;
 import com.tropimon.randompvp.calc.Stat;

@@ -84,6 +84,32 @@ public final class SetInferenceEngine {
         hypothese.nombreObservations++;
     }
 
+    private static Pokemon construirePokemonHypothetique(Pokemon base, String objet, String talent) {
+        Pokemon.Builder b = Pokemon.builder(base.getEspece(), base.getNiveau(), base.getType1(), base.getType2())
+            .statBase(Stat.PV, base.getStatBase(Stat.PV))
+            .statBase(Stat.ATTAQUE, base.getStatBase(Stat.ATTAQUE))
+            .statBase(Stat.DEFENSE, base.getStatBase(Stat.DEFENSE))
+            .statBase(Stat.ATTAQUE_SPE, base.getStatBase(Stat.ATTAQUE_SPE))
+            .statBase(Stat.DEFENSE_SPE, base.getStatBase(Stat.DEFENSE_SPE))
+            .statBase(Stat.VITESSE, base.getStatBase(Stat.VITESSE))
+            .teraType(base.getTeraType())
+            .teracristallise(base.isTeracristallise());
+
+        // 31 IV / 85 EV partout / nature neutre.
+        RandomBattleFormat.appliquer(b);
+
+        if (!StatHypothesis.AUCUN.equals(objet)) b.objet(objet);
+        if (!StatHypothesis.AUCUN.equals(talent)) b.talent(talent);
+
+        Pokemon p = b.build();
+        p.setStatut(base.getStatut());
+        p.setPvActuels(base.getPvActuels());
+        for (Stat s : Stat.values()) {
+            if (s != Stat.PV) p.setStage(s, base.getStage(s));
+        }
+        return p;
+    }
+
     private static java.util.Set<String> avecAucun(Set<String> base) {
         java.util.Set<String> resultat = new java.util.HashSet<>(base);
         resultat.add(StatHypothesis.AUCUN);
