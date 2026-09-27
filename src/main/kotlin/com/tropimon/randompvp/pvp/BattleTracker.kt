@@ -128,7 +128,17 @@ object BattleTracker {
                     opponentFainted[key] = hp <= 0f
                     opponentStatus[key]  = try { bp.status?.showdownName } catch (_: Exception) { null }
                     if (!opponentRevealed.containsKey(key)) {
-                        opponentRevealed[key] = try { bp.properties.aspects } catch (_: Exception) { emptySet() }
+                        // Les aspects viennent de l'ETAT du Pokemon en combat, pas de
+                        // ses properties : properties.aspects ne porte pas la forme
+                        // regionale cote adverse, d'ou des sprites de forme de base
+                        // pour un Typhlosion de Hisui ou un Caninos de Galar. C'est
+                        // la meme source que BattleStateTracker utilise deja pour
+                        // resoudre la forme et donc les stats de base.
+                        opponentRevealed[key] = try {
+                            bp.state.currentAspects
+                        } catch (_: Exception) {
+                            try { bp.properties.aspects } catch (_: Exception) { emptySet() }
+                        }
                     }
                 }
             }
