@@ -135,8 +135,12 @@ public final class ObservationCollector {
         // subi un coup super efficace - signature quasi unique (seule autre source
         // connue : Croissance sous soleil, explicitement exclue ci-dessous).
         tenterConfirmerVulneAssurance(adversaire, joueur);
+        tenterConfirmerDefiantBattant(adversaire);
         stageAtkAdvDebutTour = BoostTracker.getStageAdversaire(Stat.ATTAQUE);
         stageAtkSpeAdvDebutTour = BoostTracker.getStageAdversaire(Stat.ATTAQUE_SPE);
+        stageDefAdvDebutTour = BoostTracker.getStageAdversaire(Stat.DEFENSE);
+        stageDefSpeAdvDebutTour = BoostTracker.getStageAdversaire(Stat.DEFENSE_SPE);
+        stageVitAdvDebutTour = BoostTracker.getStageAdversaire(Stat.VITESSE);
 
         // Compteurs Toxik : +1 par tour passé empoisonné gravement (reset au switch/soin)
         if (joueur.getStatut() == Pokemon.Statut.POISON_GRAVE) compteurToxikJoueur++;
@@ -193,6 +197,16 @@ public final class ObservationCollector {
             if (coupJoueurDuTour != null && "knockoff".equals(coupJoueurDuTour.showdownId())
                     && perteAdversaire >= 0.5
                     && !"Glu".equals(adversaire.getTalent())) {
+                OBJETS_RETIRES.add(adversaire.getEspece());
+            }
+
+            // Ballon : explose dès qu'une attaque touche RÉELLEMENT le porteur
+            // (jamais sur les dégâts indirects - confusion, brûlure, poison,
+            // sable, Piège de Roc - vérifié sur Poképédia). perteAdversaire > 0
+            // exclut déjà naturellement le cas d'immunité Sol non consommée
+            // (une capacité Sol contre un Ballon intact inflige 0 dégât).
+            if ("Ballon".equals(adversaire.getObjet()) && coupJoueurDuTour != null
+                    && !joueurNAPasAttaque() && perteAdversaire > 0) {
                 OBJETS_RETIRES.add(adversaire.getEspece());
             }
 
@@ -264,6 +278,8 @@ public final class ObservationCollector {
         coupJoueurDuTour = null;
         coupAdversaireDuTour = null;
         adversaireAAgiEnPremier = null;
+
+        tenterAppliquerHerbeBlanche(joueur, adversaire);
     }
 
     public static synchronized void signalerCoupUtilise(MoveUseTracker.CoupDetecte coup) {
@@ -691,6 +707,64 @@ public final class ObservationCollector {
         }
     }
 
+    /**
+     * Confirme Défiant (+2 Attaque) ou Battant (+2 Attaque Spé) si l'adversaire
+     * subit une baisse d'au moins une stat ce tour (par l'attaquant, pas
+     * auto-infligée) et que son Attaque ou Attaque Spé monte de +2 en réaction,
+     * sans qu'il ait lui-même joué de capacité offensive ce tour (ce qui
+     * exclurait une explication auto-infligée).
+     */
+    /**
+     * Herbe Blanche : restaure TOUTES les stats du porteur ayant subi une
+     * baisse à la fin du tour, quelle qu'en soit la cause (capacité auto-
+     * baissante comme Surchauffe/Draco-Météore, ou même un talent adverse
+     * comme Intimidation - confirmé sur Poképédia) - usage unique, consommé
+     * dès qu'au moins une restauration a eu lieu.
+     */
+    private static void tenterAppliquerHerbeBlanche(Pokemon joueur, Pokemon adversaire) {
+        appliquerHerbeBlancheUnCote(joueur, false);
+        appliquerHerbeBlancheUnCote(adversaire, true);
+    }
+
+    private static void appliquerHerbeBlancheUnCote(Pokemon porteur, boolean estAdversaire) {
+        if (porteur == null || !"Herbe Blanche".equals(porteur.getObjet())) return;
+        boolean auMoinsUneBaisse = false;
+        for (Stat s : Stat.values()) {
+            if (s == Stat.PV) continue;
+            int stage = estAdversaire ? BoostTracker.getStageAdversaire(s) : BoostTracker.getStageJoueur(s);
+            if (stage < 0) {
+                if (estAdversaire) BoostTracker.forcerStageAdversaire(s, 0);
+                else BoostTracker.forcerStageJoueur(s, 0);
+                auMoinsUneBaisse = true;
+            }
+        }
+        // Consommé - ne s'applique qu'à l'estimation adverse (l'objet du
+        // joueur n'a pas besoin d'être "retiré", il est déjà vu directement).
+        if (auMoinsUneBaisse && estAdversaire) {
+            OBJETS_RETIRES.add(porteur.getEspece());
+        }
+    }
+
+    private static void tenterConfirmerDefiantBattant(Pokemon adversaire) {
+        boolean talentDejaConnu = TALENTS_CONFIRMES.containsKey(adversaire.getEspece());
+        if (talentDejaConnu) return;
+
+        boolean uneAutreStatABaisse =
+            (BoostTracker.getStageAdversaire(Stat.DEFENSE) - stageDefAdvDebutTour < 0)
+            || (BoostTracker.getStageAdversaire(Stat.DEFENSE_SPE) - stageDefSpeAdvDebutTour < 0)
+            || (BoostTracker.getStageAdversaire(Stat.VITESSE) - stageVitAdvDebutTour < 0);
+        if (!uneAutreStatABaisse) return;
+
+        int deltaAtk = BoostTracker.getStageAdversaire(Stat.ATTAQUE) - stageAtkAdvDebutTour;
+        int deltaAtkSpe = BoostTracker.getStageAdversaire(Stat.ATTAQUE_SPE) - stageAtkSpeAdvDebutTour;
+
+        if (deltaAtk == 2) {
+            TALENTS_CONFIRMES.put(adversaire.getEspece(), "Défiant");
+        } else if (deltaAtkSpe == 2) {
+            TALENTS_CONFIRMES.put(adversaire.getEspece(), "Battant");
+        }
+    }
+
     private static void tenterConfirmerEvoluroc(String espece, SmogonDataLoader.SmogonPokemonData smogon) {
         if (smogon == null || smogon.topItemsShowdownId().isEmpty()) return;
         if (OBJETS_CONFIRMES.containsKey(espece) || OBJETS_RETIRES.contains(espece)) return;
@@ -1054,6 +1128,12 @@ public final class ObservationCollector {
     private static int stageAtkAdvDebutTour = 0;
     private static int stageAtkSpeAdvDebutTour = 0;
 
+    // Snapshots supplémentaires pour Défiant/Battant (une autre stat baisse,
+    // en réaction l'Attaque ou l'Attaque Spé monte de +2).
+    private static int stageDefAdvDebutTour = 0;
+    private static int stageDefSpeAdvDebutTour = 0;
+    private static int stageVitAdvDebutTour = 0;
+
     // Poing de Colère : persiste PAR ESPÈCE pour toute la durée du combat,
     // ne reset jamais au switch (contrairement à tout le reste ci-dessus).
     private static final Map<String, Integer> COUPS_RAGE_FIST_JOUEUR = new HashMap<>();
@@ -1216,6 +1296,11 @@ public final class ObservationCollector {
         adversaireSalaison = false;
         compteurToxikJoueur = 0;
         compteurToxikAdversaire = 0;
+        stageAtkAdvDebutTour = 0;
+        stageAtkSpeAdvDebutTour = 0;
+        stageDefAdvDebutTour = 0;
+        stageDefSpeAdvDebutTour = 0;
+        stageVitAdvDebutTour = 0;
         COUPS_RAGE_FIST_JOUEUR.clear();
         COUPS_RAGE_FIST_ADVERSAIRE.clear();
         especeJoueurSuivie = null;

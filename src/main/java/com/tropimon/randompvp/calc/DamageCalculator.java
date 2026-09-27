@@ -63,9 +63,9 @@ public class DamageCalculator {
             this.pourcentageMin = pvMaxDefenseur == 0 ? 0 : (100.0 * this.degatsMin) / pvMaxDefenseur;
             this.pourcentageMax = pvMaxDefenseur == 0 ? 0 : (100.0 * this.degatsMax) / pvMaxDefenseur;
 
-            // Robuste ou Ceinture Focus : survit à 1 PV sur un coup fatal
+            // Fermeté ou Ceinture Focus : survit à 1 PV sur un coup fatal
             // si à pleins PV (garanti, pas de chance d'échec pour ces deux-là)
-            boolean protectionActive = ("Robuste".equals(defenseurRobuste)
+            boolean protectionActive = ("Fermeté".equals(defenseurRobuste)
                 || "Ceinture Focus".equals(defenseurObjet))
                 && pvActuelsDefenseur == (int) pvMaxDefenseur;
             if (protectionActive) {
@@ -690,7 +690,7 @@ public class DamageCalculator {
                 ctx.multiplicateurDegatsFinal *= 1.2;
             }
             String talentDef = defenseur.getTalent();
-            if ("Filtre".equals(talentDef) || "Solide Roc".equals(talentDef)) {
+            if ("Filtre".equals(talentDef) || "Solide Roc".equals(talentDef) || "Prisme-Armure".equals(talentDef)) {
                 ctx.multiplicateurDegatsFinal *= 0.75;
             }
         } else if (efficacite > 0.0 && efficacite < 1.0) {
@@ -789,7 +789,7 @@ public class DamageCalculator {
         return 1.0;
     }
 
-    private static boolean estAuSol(Pokemon p) {
+    public static boolean estAuSol(Pokemon p) {
         if (p.possedeType(PokemonType.VOL)) return false;
         if ("Lévitation".equals(p.getTalent())) return false;
         return !"Ballon".equals(p.getObjet());

@@ -17,7 +17,7 @@ public final class SetInferenceEngine {
         "Mâchoire Brute", "Force Sable", "Verres Teintés", "Sans Limite", "Télécharge",
         "Coloforce", "Force Pure", "Griffe Dure", "Rage Poison", "Rage Brûlure",
         "Pouls Orichalque", "Moteur Hadron", "Dent de Dragon", "Œil Révélateur",
-        "Aquabulle", "Porte-Roche", "Seigneur Suprême", "Tranchant", "Transistor",
+        "Aquabulle", "Porte-Roche", "Général Suprême", "Tranchant", "Transistor",
         "Infiltration"
     );
 
@@ -33,7 +33,7 @@ public final class SetInferenceEngine {
         "Absorb'Eau", "Absorb'Volt", "Absorbe-Terre", "Anti-Bruit", "Aquabulle",
         "Boule de Poils", "Garde Mystik", "Herbivore", "Lavabo", "Lucidité",
         "Lévitation", "Paratonnerre", "Pare-Balles", "Peau Sèche", "Toison Épaisse",
-        "Torche", "Écailles Glacées", "Robuste", "Fantômasque"
+        "Torche", "Écailles Glacées", "Fermeté", "Fantômasque"
     );
 
     public static void narrow(StatHypothesis hypothese, Stat statCible, boolean estStatAttaquant,

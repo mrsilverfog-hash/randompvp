@@ -23,14 +23,15 @@ public interface AbilityModifier {
         "shadowball", "sludgebomb", "aurasphere", "focusblast", "energyball",
         "electroball", "gyroball", "weatherball", "mudbomb", "octazooka",
         "eggbomb", "rockwrecker", "acidspray", "pyroball", "mistball",
-        "pollenpuff", "beakblast", "barrage");
+        "pollenpuff", "beakblast", "barrage", "bulletseed", "rockblast");
 
     // Capacités à flag "son" les plus jouées en compétitif (Anti-Bruit)
     static final java.util.Set<String> CAPACITES_SON = java.util.Set.of(
         "boomburst", "hypervoice", "bugbuzz", "roar", "screech",
         "sing", "supersonic", "growl", "snarl", "uproar",
         "eeriespell", "clangoroussoul", "disarmingvoice", "sparklingaria",
-        "relicsong", "round", "chatter", "grasswhistle", "metalsound");
+        "relicsong", "round", "chatter", "grasswhistle", "metalsound",
+        "perishsong", "partingshot", "echoedvoice");
 
     Map<String, AbilityModifier> REGISTRE = construireRegistre();
 
@@ -339,7 +340,7 @@ public interface AbilityModifier {
             }
         });
 
-        m.put("Seigneur Suprême", new AbilityModifier() {
+        m.put("Général Suprême", new AbilityModifier() {
             @Override
             public void appliquerCoteAttaquant(ModifierContext ctx) {
                 // +10% par coéquipier KO (max +50%, 5 coéquipiers). Le

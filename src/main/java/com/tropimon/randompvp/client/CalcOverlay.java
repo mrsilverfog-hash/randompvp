@@ -47,6 +47,25 @@ public final class CalcOverlay implements HudRenderCallback {
         lignesAffichage.add(new LigneTexte(texte, x, y, couleur));
     }
 
+    /** Construit "Atq+2, Vit-1" à partir des stages actifs (hors PV), vide si tous neutres. */
+    private String formatBoosts(Pokemon p) {
+        String[][] abrev = {
+            {"ATTAQUE", "Atq"}, {"DEFENSE", "Def"}, {"ATTAQUE_SPE", "AtqSpé"},
+            {"DEFENSE_SPE", "DéfSpé"}, {"VITESSE", "Vit"}
+        };
+        StringBuilder sb = new StringBuilder();
+        for (Stat s : Stat.values()) {
+            if (s == Stat.PV) continue;
+            int stage = p.getStage(s);
+            if (stage == 0) continue;
+            String court = s.name();
+            for (String[] a : abrev) if (a[0].equals(court)) court = a[1];
+            if (sb.length() > 0) sb.append(", ");
+            sb.append(court).append(stage > 0 ? "+" : "").append(stage);
+        }
+        return sb.toString();
+    }
+
     @Override
     public void onHudRender(DrawContext context, net.minecraft.client.render.RenderTickCounter tickCounter) {
         // Doit tourner AUSSI hors combat : c'est là que le reset entre combats s'exécute
@@ -131,6 +150,18 @@ public final class CalcOverlay implements HudRenderCallback {
             ? "RandomPvp [transformé]" : "RandomPvp";
         dessinerTexte(titre, x, y, COULEUR_TITRE);
         y += hauteurLigne + 2;
+
+        // Boosts actifs des deux camps, pour vérifier visuellement que le
+        // mod utilise bien le même stage que ce qui est réellement en jeu.
+        String boostsJoueur = formatBoosts(joueur);
+        String boostsAdv = formatBoosts(adversaire);
+        if (!boostsJoueur.isEmpty() || !boostsAdv.isEmpty()) {
+            String ligneBoosts = (boostsJoueur.isEmpty() ? "" : "Toi : " + boostsJoueur)
+                + (!boostsJoueur.isEmpty() && !boostsAdv.isEmpty() ? "  |  " : "")
+                + (boostsAdv.isEmpty() ? "" : "Adv : " + boostsAdv);
+            dessinerTexte(ligneBoosts, x, y, COULEUR_MOUCHOIR);
+            y += hauteurLigne;
+        }
 
         // Vitesses effectives (Distorsion inverse la priorité)
         int vitJoueur = vitesseEffective(joueur);
@@ -262,15 +293,27 @@ public final class CalcOverlay implements HudRenderCallback {
                 if (capaciteAdv == null || capaciteAdv.estCapaciteDeStatut()) {
                     ligne = (estRevele ? "✓ " : "") + nom + " : statut" + suffixePp;
                 } else {
-                    DamageCalculator.Resultat r = DamageCalculator.calculer(adversaire, joueur, capaciteAdv, field, field.getEcransJoueur(), false);
+                    // Fulgurayon : +1 Attaque Spéciale GARANTI dès son lancement
+                    // (tour de charge, ou immédiatement sous la pluie) - pas
+                    // conditionnel comme Prise de Bec, donc appliqué directement
+                    // au calcul plutôt que d'afficher deux scénarios.
+                    boolean estFulgurayon = "electroshot".equals(template.getName());
+                    if (estFulgurayon) adversaire.modifierStage(Stat.ATTAQUE_SPE, 1);
+                    DamageCalculator.Resultat r;
+                    try {
+                        r = DamageCalculator.calculer(adversaire, joueur, capaciteAdv, field, field.getEcransJoueur(), false);
+                    } finally {
+                        if (estFulgurayon) adversaire.modifierStage(Stat.ATTAQUE_SPE, -1);
+                    }
                     if (r.immunise) {
                         ligne = (estRevele ? "✓ " : "") + nom + " : immunisé" + suffixePp;
                     } else {
                         Stat statAtk = capaciteAdv.getCategorie() == com.tropimon.randompvp.calc.Move.Categorie.PHYSIQUE
                             ? Stat.ATTAQUE : Stat.ATTAQUE_SPE;
                         String marq = adversaire.estCorrigee(statAtk) ? "~" : "";
-                        ligne = String.format("%s%s : %s%.0f%% - %.0f%%%s",
-                            estRevele ? "✓ " : "", nom, marq, r.pourcentageMin, r.pourcentageMax, suffixePp);
+                        String suffixeBoost = estFulgurayon ? " (+1)" : "";
+                        ligne = String.format("%s%s : %s%.0f%% - %.0f%%%s%s",
+                            estRevele ? "✓ " : "", nom, marq, r.pourcentageMin, r.pourcentageMax, suffixeBoost, suffixePp);
                         if (r.koGaranti) couleur = COULEUR_KO;
                         else if (r.koPossible && !estRevele) couleur = 0xFFAA00;
 
@@ -287,6 +330,19 @@ public final class CalcOverlay implements HudRenderCallback {
                                 estRevele ? "✓ " : "", nom,
                                 avant.pourcentageMin, avant.pourcentageMax,
                                 apres.pourcentageMin, apres.pourcentageMax, suffixePp);
+                        }
+
+                        // Laser Hasard : 30% de chances de doubler sa puissance
+                        // (80 -> 160) pour le tour en cours - chance aléatoire pure,
+                        // ni conditionnelle ni garantie. Affiche la valeur normale
+                        // puis, entre parenthèses, la valeur si ça double.
+                        if ("ficklebeam".equals(template.getName())) {
+                            DamageCalculator.Resultat boostee = calculerAvecPuissanceForcee(
+                                adversaire, joueur, capaciteAdv, 160, field, field.getEcransJoueur());
+                            ligne = String.format("%s%s : %.0f%% - %.0f%% (%.0f%% - %.0f%%)%s",
+                                estRevele ? "✓ " : "", nom,
+                                r.pourcentageMin, r.pourcentageMax,
+                                boostee.pourcentageMin, boostee.pourcentageMax, suffixePp);
                         }
 
                         // Hypothèse objet offensif quasi-certain (> 50% d'usage Smogon) :
@@ -369,7 +425,7 @@ public final class CalcOverlay implements HudRenderCallback {
             y += hauteurLigne;
         }
 
-        // --- Météo : une ligne avec icône selon le type actif ---
+        // --- Météo : une ligne avec icône selon le type actif, et son effet ---
         if (field.getMeteo() != com.tropimon.randompvp.calc.Field.Meteo.AUCUNE
                 && FieldTracker.getToursMeteoRestants() > 0) {
             int typeIconeMeteo = switch (field.getMeteo()) {
@@ -380,12 +436,38 @@ public final class CalcOverlay implements HudRenderCallback {
                 default -> -1;
             };
             if (typeIconeMeteo >= 0) dessinerIcone(typeIconeMeteo, x, y);
-            dessinerTexte(String.format("Météo : ~%dt", FieldTracker.getToursMeteoRestants()),
+
+            String nomMeteo = switch (field.getMeteo()) {
+                case SOLEIL -> "Soleil";
+                case SOLEIL_INTENSE -> "Soleil Intense";
+                case PLUIE -> "Pluie";
+                case PLUIE_INTENSE -> "Pluie Battante";
+                case SABLE -> "Tempête de Sable";
+                case NEIGE -> "Tempête de Neige";
+                default -> "Météo";
+            };
+            String effetMeteo = switch (field.getMeteo()) {
+                case SOLEIL, SOLEIL_INTENSE -> "+50% Feu / -50% Eau";
+                case PLUIE, PLUIE_INTENSE -> "+50% Eau / -50% Feu";
+                case SABLE -> {
+                    boolean quelquUnRoche = joueur.possedeType(com.tropimon.randompvp.calc.PokemonType.ROCHE)
+                        || adversaire.possedeType(com.tropimon.randompvp.calc.PokemonType.ROCHE);
+                    String base = "1/16 hp/t (Roche/Sol/Acier immunisés)";
+                    yield quelquUnRoche ? base + ", +50% DéfSpé Roche" : base;
+                }
+                case NEIGE -> {
+                    boolean quelquUnGlace = joueur.possedeType(com.tropimon.randompvp.calc.PokemonType.GLACE)
+                        || adversaire.possedeType(com.tropimon.randompvp.calc.PokemonType.GLACE);
+                    yield quelquUnGlace ? "+50% Déf Glace" : "0% (aucun Glace)";
+                }
+                default -> "";
+            };
+            dessinerTexte(String.format("%s (~%dt) (%s)", nomMeteo, FieldTracker.getToursMeteoRestants(), effetMeteo),
                 x + 13, y, COULEUR_TEXTE);
             y += hauteurLigne;
         }
 
-        // --- Terrain : une ligne avec icône selon le type actif ---
+        // --- Terrain : une ligne avec icône selon le type actif, et son effet ---
         if (field.getTerrain() != com.tropimon.randompvp.calc.Field.TypeTerrain.AUCUN
                 && FieldTracker.getToursTerrainRestants() > 0) {
             int typeIconeTerrain = switch (field.getTerrain()) {
@@ -396,7 +478,28 @@ public final class CalcOverlay implements HudRenderCallback {
                 default -> -1;
             };
             if (typeIconeTerrain >= 0) dessinerIcone(typeIconeTerrain, x, y);
-            dessinerTexte(String.format("Terrain : ~%dt", FieldTracker.getToursTerrainRestants()),
+
+            String nomTerrain = switch (field.getTerrain()) {
+                case ELECTRIQUE -> "Champ Électrique";
+                case HERBU -> "Champ Herbu";
+                case PSYCHIQUE -> "Champ Psychique";
+                case BRUMEUX -> "Champ Brumeux";
+                default -> "Terrain";
+            };
+            String effet = switch (field.getTerrain()) {
+                case ELECTRIQUE -> "anti-sommeil (sol)";
+                case HERBU -> {
+                    // Ne soigne que les Pokémon au sol (pas Vol/Lévitation/Ballon) -
+                    // vérifié sur Poképédia, précision importante pour ne pas
+                    // afficher un soin qui ne s'appliquera pas réellement.
+                    boolean quelquUnEnProfite = DamageCalculator.estAuSol(joueur) || DamageCalculator.estAuSol(adversaire);
+                    yield quelquUnEnProfite ? "+6% hp/t (sol)" : "0% (aucun au sol)";
+                }
+                case PSYCHIQUE -> "anti-priorité (sol)";
+                case BRUMEUX -> "anti-statut (sol)";
+                default -> "";
+            };
+            dessinerTexte(String.format("%s (~%dt) (%s)", nomTerrain, FieldTracker.getToursTerrainRestants(), effet),
                 x + 13, y, COULEUR_TEXTE);
             y += hauteurLigne;
         }
@@ -466,7 +569,7 @@ public final class CalcOverlay implements HudRenderCallback {
             y += hauteurLigne;
         } else if (objetRetire) {
             y += 4;
-            dessinerTexte("Objet confirmé : aucun (Sabotage)", x, y, COULEUR_REVELE);
+            dessinerTexte("Objet confirmé : aucun (retiré)", x, y, COULEUR_REVELE);
             y += hauteurLigne;
         }
 

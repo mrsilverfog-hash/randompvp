@@ -84,7 +84,7 @@ public final class ShowdownIdMapper {
         TALENTS.put("transistor", "Transistor");
         TALENTS.put("bulletproof", "Pare-Balles");
         TALENTS.put("soundproof", "Anti-Bruit");
-        TALENTS.put("sturdy", "Robuste");
+        TALENTS.put("sturdy", "Fermeté");
         TALENTS.put("heavymetal", "Heavy Metal");
         TALENTS.put("lightmetal", "Light Metal");
         TALENTS.put("icebody", "Corps Gel");
@@ -125,6 +125,8 @@ public final class ShowdownIdMapper {
         TALENTS.put("download", "Télécharge");
         TALENTS.put("regenerator", "Régé-Force");
         TALENTS.put("intimidate", "Intimidation");
+        TALENTS.put("defiant", "Défiant");
+        TALENTS.put("competitive", "Battant");
         TALENTS.put("speedboost", "Turbo");
         TALENTS.put("drizzle", "Pluie");
         TALENTS.put("drought", "Sécheresse");
@@ -155,7 +157,7 @@ public final class ShowdownIdMapper {
         TALENTS.put("moldbreaker", "Brise Moule");
         TALENTS.put("turboblaze", "Turboblaze");
         TALENTS.put("teravolt", "Téravolt");
-        TALENTS.put("supremeoverlord", "Seigneur Suprême");
+        TALENTS.put("supremeoverlord", "Général Suprême");
         TALENTS.put("vesselofruin", "Urne du Fléau");
         TALENTS.put("swordofruin", "Épée du Fléau");
         TALENTS.put("beadsofruin", "Perles du Fléau");
@@ -177,6 +179,7 @@ public final class ShowdownIdMapper {
         OBJETS.put("eviolite", "Évoluroc");
         OBJETS.put("heavydutyboots", "Grosses Bottes");
         OBJETS.put("leftovers", "Restes");
+        OBJETS.put("whiteherb", "Herbe Blanche");
         OBJETS.put("weaknesspolicy", "Vulné-Assurance");
         OBJETS.put("terrainextender", "Champ'Duit");
         OBJETS.put("rockyhelmet", "Casque Brut");
