@@ -16,6 +16,8 @@ import com.tropimon.randompvp.calc.SmogonDataLoader;
 import com.tropimon.randompvp.calc.Stat;
 import com.tropimon.randompvp.calc.StatHypothesis;
 import net.minecraft.client.MinecraftClient;
+import net.minecraft.text.Text;
+import net.minecraft.text.TranslatableTextContent;
 
 import java.util.ArrayList;
 import java.util.HashMap;
@@ -58,6 +60,15 @@ public final class ObservationCollector {
 
     // Objets confirmés par observation (ex: soin de fin de tour ~1/16 => Restes)
     private static final Map<String, String> OBJETS_CONFIRMES = new HashMap<>();
+
+    // Sous-ensemble de OBJETS_CONFIRMES : confirmé PROACTIVEMENT par simple
+    // dominance statistique Smogon (>=80% d'usage), pas par une preuve réelle
+    // en combat - donc révocable si une observation le contredit ensuite
+    // (changement de capacité sans switch, ou dégâts/vitesse incompatibles).
+    // Une confirmation par preuve réelle n'entre jamais dans cet ensemble et
+    // n'est donc jamais révoquée.
+    private static final Set<String> OBJETS_CONFIRMES_PROACTIVEMENT = new HashSet<>();
+
     private static String coupAdversaireTourPrecedent = null;
 
     // Capacités qui soignent leur utilisateur : excluent la confirmation de Restes
@@ -143,6 +154,11 @@ public final class ObservationCollector {
             compteurToxikAdversaire = 0;
             coupVerrouAdversaire = null;   // le verrou Choix tombe au switch
             compteurAbrisAdversaire = 0;
+        } else if (espaceAdversaireDuTour != null && coupAdversaireDuTour != null) {
+            // Pas de switch : une capacité différente de celle du tour
+            // précédent est une preuve certaine que l'objet Choix
+            // proactif était une erreur (Choix verrouille sur un seul coup).
+            tenterRevoquerObjetChoixProactif(adversaire.getEspece(), coupAdversaireDuTour.showdownId());
         }
 
         // Abris consécutifs de l'adversaire (le 2e n'a que ~33% de réussite)
@@ -240,6 +256,16 @@ public final class ObservationCollector {
                     && coupJoueurDuTour != null
                     && !joueurNAPasAttaque() && perteAdversaire > 0) {
                 OBJETS_RETIRES.add(adversaire.getEspece());
+            }
+
+            // Symétrique, pour MON propre Ballon. Même si joueur.getObjet()
+            // devrait en théorie déjà refléter la vraie destruction de
+            // l'objet (lu en direct depuis Cobblemon, pas une estimation),
+            // un flag de secours indépendant évite tout souci si la mise à
+            // jour n'est pas immédiate côté client - forcé dans CalcOverlay.
+            if ("Ballon".equals(joueur.getObjet()) && coupAdversaireDuTour != null
+                    && !adversaireNAPasAttaque() && perteJoueur > 0) {
+                ballonJoueurEclate = true;
             }
 
             // Détection Casque Brut : tour "propre" où le joueur attaque au contact,
@@ -515,6 +541,8 @@ public final class ObservationCollector {
         boolean objetRetire = OBJETS_RETIRES.contains(espece);
         tenterConfirmerEcharpeChoix(espece, adversaireBase);
         tenterConfirmerEvoluroc(espece, smogon);
+        // NON APPELÉ en random battle — voir la méthode pour le détail.
+        // tenterConfirmerObjetChoixProactivement(espece, smogon);
 
         Pokemon.Builder b = Pokemon.builder(espece, adversaireBase.getNiveau(),
             adversaireBase.getType1(), adversaireBase.getType2());
@@ -825,6 +853,68 @@ public final class ObservationCollector {
         }
     }
 
+    /**
+     * DÉSACTIVÉE EN RANDOM BATTLE — conservée mais plus appelée.
+     *
+     * Cette détection confirme un objet à partir du taux d'usage Smogon, donc
+     * à partir des habitudes du métagame compétitif. En random battle, l'objet
+     * est tiré au hasard : qu'un Pokémon porte un Mouchoir Choix dans 85% des
+     * équipes compétitives ne dit rien de ce qu'il tient ici. Pire, la méthode
+     * écrit dans OBJETS_CONFIRMES, donc le mod afficherait "Objet confirmé"
+     * et fausserait les dégâts sur une simple statistique de métagame — c'est
+     * exactement ce qu'on a retiré pour les EV et la nature.
+     *
+     * La révocation sur preuve contraire (tenterRevoquerObjetChoixProactif)
+     * limiterait les dégâts mais seulement APRÈS plusieurs tours d'erreur.
+     *
+     * Pour la réactiver : décommenter l'appel dans construireAdversaireEstime.
+     *
+     * Confirme proactivement un objet Choix (Mouchoir/Bandeau/Lunettes) si
+     * c'est le top objet Smogon avec au moins 80% d'usage - seuil élevé
+     * volontairement (contrairement à Évoluroc à 50%) car ces objets
+     * s'appliquent à N'IMPORTE QUEL Pokémon sans condition d'éligibilité,
+     * donc un faux positif aurait un vrai impact sur le calcul. Marquée
+     * comme révocable (OBJETS_CONFIRMES_PROACTIVEMENT) : si une observation
+     * contredit ensuite cette hypothèse (changement de capacité sans switch,
+     * ou dégâts/vitesse incompatibles), la confirmation est retirée et le
+     * calcul repasse sans l'objet.
+     */
+    // Espèces pour lesquelles un objet Choix proactif a été révoqué (preuve
+    // contraire observée) : empêche de re-confirmer le même objet Choix au
+    // prochain appel, SANS bloquer d'autres hypothèses d'objet comme le
+    // ferait OBJETS_RETIRES (qui signifie "aucun objet du tout").
+    private static final Set<String> OBJETS_CHOIX_EXCLUS = new HashSet<>();
+
+    private static void tenterConfirmerObjetChoixProactivement(String espece, SmogonDataLoader.SmogonPokemonData smogon) {
+        if (smogon == null || smogon.topItemsShowdownId().isEmpty()) return;
+        if (OBJETS_CONFIRMES.containsKey(espece) || OBJETS_RETIRES.contains(espece)) return;
+        if (OBJETS_CHOIX_EXCLUS.contains(espece)) return;
+        String topObjet = ShowdownIdMapper.objet(smogon.topItemsShowdownId().get(0));
+        boolean estObjetChoix = "Mouchoir Choix".equals(topObjet)
+            || "Bandeau Choix".equals(topObjet) || "Lunettes Choix".equals(topObjet);
+        if (estObjetChoix && smogon.topItemUsageFraction() >= 0.80) {
+            OBJETS_CONFIRMES.put(espece, topObjet);
+            OBJETS_CONFIRMES_PROACTIVEMENT.add(espece);
+        }
+    }
+
+    /**
+     * Révoque une confirmation proactive d'objet Choix si elle est contredite :
+     * soit par un changement de capacité du même Pokémon sans switch entre-
+     * temps (preuve certaine - Choix verrouille sur la première capacité
+     * utilisée depuis l'entrée), soit en secours par une future détection
+     * d'impossibilité statistique (dégâts/vitesse incompatibles).
+     */
+    private static void tenterRevoquerObjetChoixProactif(String espece, String coupActuelId) {
+        if (!OBJETS_CONFIRMES_PROACTIVEMENT.contains(espece)) return;
+        if (coupAdversaireTourPrecedent == null || coupActuelId == null) return;
+        if (!coupAdversaireTourPrecedent.equals(coupActuelId)) {
+            OBJETS_CONFIRMES.remove(espece);
+            OBJETS_CONFIRMES_PROACTIVEMENT.remove(espece);
+            OBJETS_CHOIX_EXCLUS.add(espece);
+        }
+    }
+
     private static void tenterConfirmerEvoluroc(String espece, SmogonDataLoader.SmogonPokemonData smogon) {
         if (smogon == null || smogon.topItemsShowdownId().isEmpty()) return;
         if (OBJETS_CONFIRMES.containsKey(espece) || OBJETS_RETIRES.contains(espece)) return;
@@ -1095,6 +1185,35 @@ public final class ObservationCollector {
         OBJETS_CONFIRMES.put(espece, objetFr);
     }
 
+    /**
+     * Intercepte les messages "cobblemon.battle.enditem.XXX" - confirmé par
+     * un vrai log (tropicalc-messages-debug.txt, combat contre Ratdeglingo,
+     * clé exacte "cobblemon.battle.enditem.airballoon") : un message dédié
+     * existe pour la destruction du Ballon, bien plus fiable que la détection
+     * par comportement (perteAdversaire/perteJoueur > 0) utilisée jusqu'ici,
+     * qui reste en place en secours mais ne devrait plus jamais être
+     * nécessaire pour ce cas précis.
+     */
+    public static void traiterMessageObjet(Text message) {
+        if (message == null) return;
+        if (!(message.getContent() instanceof TranslatableTextContent contenu)) return;
+        String cle = contenu.getKey();
+        if (cle == null || !cle.equals("cobblemon.battle.enditem.airballoon")) return;
+
+        Object[] args = contenu.getArgs();
+        if (args.length == 0) return;
+        String proprietaire = MoveUseTracker.extraireProprietaire(args[0]);
+        Boolean estAdversaire = determinerAttaquant(proprietaire);
+        if (estAdversaire == null) return;
+
+        if (estAdversaire) {
+            Pokemon adv = BattleStateTracker.getAdversaireActif();
+            if (adv != null) OBJETS_RETIRES.add(adv.getEspece());
+        } else {
+            ballonJoueurEclate = true;
+        }
+    }
+
     /** Vrai si l'objet de cette espèce est un fait observé (soin vu, ou retiré par Sabotage). */
     public static boolean estObjetConfirme(String espece) {
         return OBJETS_CONFIRMES.containsKey(espece) || OBJETS_RETIRES.contains(espece);
@@ -1195,6 +1314,13 @@ public final class ObservationCollector {
     private static boolean adversaireVampigraine = false;
     private static int compteurToxikJoueur = 0;
     private static int compteurToxikAdversaire = 0;
+
+    // Vrai dès que le Ballon du joueur a été touché par une attaque réelle -
+    // voir la détection dans signalerNouveauTour. Utilisé par CalcOverlay
+    // pour forcer l'absence de Ballon, en secours de la lecture directe
+    // depuis Cobblemon qui devrait déjà refléter ça normalement.
+    private static boolean ballonJoueurEclate = false;
+    public static boolean isBallonJoueurEclate() { return ballonJoueurEclate; }
 
     // Snapshot des stages Attaque/Attaque Spé adverses au début du tour précédent,
     // pour détecter un gain de +2/+2 simultané (Vulné-Assurance) précisément CE tour.
@@ -1333,6 +1459,7 @@ public final class ObservationCollector {
 
     public static void reinitialiser() {
         combatSauvageDetecte = false;
+        ballonJoueurEclate = false;
 
         // Rien n'est persisté entre les combats : voir construireAdversaireEstime.
         nomAdversaireCourant = null;
