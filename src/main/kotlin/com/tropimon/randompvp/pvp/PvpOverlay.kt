@@ -369,32 +369,29 @@ object PvpOverlay {
                 lines += Line("Talent: ?", 0xFF666666.toInt())
             }
 
-            // ── Données RandomPvp (ajout : observation + scouting + PP) ──
+            // ── Données RandomPvp (observation du combat en cours + PP) ──
+            // Pas de scouting inter-combats : en random battle les sets changent
+            // a chaque partie, un fait du combat precedent serait trompeur.
             try {
                 val espece = mon.speciesId
 
                 val objetConfirme  = com.tropimon.randompvp.battle.ObservationCollector.getObjetConfirme(espece)
                 val talentConfirme = com.tropimon.randompvp.battle.ObservationCollector.getTalentConfirme(espece)
                 val chip           = com.tropimon.randompvp.battle.ObservationCollector.aChipTalentConfirme(espece)
-                val scout = com.tropimon.randompvp.battle.ScoutingStore.get(
-                    com.tropimon.randompvp.battle.ObservationCollector.getNomAdversaireCourant(), espece)
                 val reveles: List<com.cobblemon.mod.common.api.moves.MoveTemplate> =
                     com.tropimon.randompvp.battle.ObservationCollector.getCoupsAdversaireReveles(espece)
 
-                val aQuelqueChose = objetConfirme != null || talentConfirme != null || chip ||
-                    (scout != null && (scout.objet != null || scout.talent != null)) ||
-                    reveles.isNotEmpty()
+                val aQuelqueChose = objetConfirme != null || talentConfirme != null ||
+                    chip || reveles.isNotEmpty()
 
                 if (aQuelqueChose) {
                     lines += Line("──── RandomPvp ────", 0xFF555555.toInt())
-                    when {
-                        objetConfirme != null -> lines += Line("Objet: $objetConfirme ✓", 0xFFFFDD88.toInt())
-                        scout?.objet != null  -> lines += Line("Objet: ${scout.objet} ?", 0xFFBBA866.toInt())
+                    if (objetConfirme != null) {
+                        lines += Line("Objet: $objetConfirme ✓", 0xFFFFDD88.toInt())
                     }
                     when {
                         talentConfirme != null -> lines += Line("Talent: $talentConfirme ✓", 0xFFAADDFF.toInt())
                         chip                   -> lines += Line("Talent: Épine de Fer/Peau Dure ✓", 0xFFAADDFF.toInt())
-                        scout?.talent != null  -> lines += Line("Talent: ${scout.talent} ?", 0xFF7899AA.toInt())
                     }
                     for (t in reveles) {
                         val maxPp = (t.pp * 8) / 5
