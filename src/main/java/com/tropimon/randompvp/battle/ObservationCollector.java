@@ -568,13 +568,6 @@ public final class ObservationCollector {
             }
         }
 
-        // Objet/talent des combats passés : meilleure estimation que Smogon,
-        // mais le "?" reste (le set a pu changer depuis)
-        if (scout != null) {
-            if (scout.objet != null && objetConfirme == null && !objetRetire) b.objet(scout.objet);
-            if (scout.talent != null) b.talent(scout.talent);
-        }
-
         if (objetConfirme != null && !objetRetire) {
             b.objet(objetConfirme);
         }
@@ -842,10 +835,12 @@ public final class ObservationCollector {
      * Ajoute une capacité connue pour cette espèce, en garantissant de
      * NE JAMAIS dépasser 4 (un vrai Pokémon n'en connaît jamais plus).
      * Une observation RÉELLE de ce combat (certaine) fait toujours de la
-     * place en retirant la plus ancienne entrée si nécessaire ; une
-     * entrée de scouting ancien (potentiellement obsolète, le set adverse
-     * a pu changer entre deux combats) n'est jamais ajoutée si ça
-     * dépasserait 4.
+     * place en retirant la plus ancienne entrée si nécessaire ; une entrée
+     * incertaine n'est jamais ajoutée si ça dépasserait 4.
+     *
+     * Depuis le retrait du scouting inter-combats, tous les appelants passent
+     * estObservationReelle=true — la branche incertaine n'a plus d'appelant.
+     * Le paramètre est conservé pour une éventuelle source estimée future.
      */
     private static void ajouterCapaciteAdversaire(String espece, String capaciteId, boolean estObservationReelle) {
         LinkedHashSet<String> ensemble = COUPS_ADVERSAIRE.computeIfAbsent(espece, k -> new LinkedHashSet<>());
