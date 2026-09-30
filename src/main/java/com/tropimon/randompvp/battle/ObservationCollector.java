@@ -71,6 +71,9 @@ public final class ObservationCollector {
 
     private static String coupAdversaireTourPrecedent = null;
 
+    /** Vent Arrière a été lancé par le camp adverse dans ce combat. */
+    private static boolean ventArriereAdversaire = false;
+
     // Capacités qui soignent leur utilisateur : excluent la confirmation de Restes
     private static final Set<String> COUPS_SOIN_OU_DRAIN = Set.of(
         "recover", "roost", "softboiled", "slackoff", "milkdrink", "moonlight",
@@ -156,9 +159,9 @@ public final class ObservationCollector {
             compteurAbrisAdversaire = 0;
         } else if (espaceAdversaireDuTour != null && coupAdversaireDuTour != null) {
             // Pas de switch : une capacité différente de celle du tour
-            // précédent est une preuve certaine que l'objet Choix
-            // proactif était une erreur (Choix verrouille sur un seul coup).
-            tenterRevoquerObjetChoixProactif(adversaire.getEspece(), coupAdversaireDuTour.showdownId());
+            // précédent est une preuve certaine qu'aucun objet Choix n'est
+            // porté (le verrou impose un seul coup jusqu'au switch).
+            tenterRevoquerObjetChoix(adversaire.getEspece(), coupAdversaireDuTour.showdownId());
         }
 
         // Abris consécutifs de l'adversaire (le 2e n'a que ~33% de réussite)
@@ -371,6 +374,14 @@ public final class ObservationCollector {
                 // adverse et mérite d'être retenue ; celle d'un Métronome, non.
                 if (!coupTire || APPELANTS_MOVESET_REEL.contains(appelant)) {
                     ajouterCapaciteAdversaire(adversaire.getEspece(), coup.showdownId(), true);
+                }
+
+                // Vent Arrière double la vitesse de TOUT le camp adverse, et
+                // n'est modélisé nulle part dans vitesseEnCombat(). Sans ce
+                // drapeau, la vitesse observée dépasse le maximum théorique et
+                // la détection conclut à tort au Mouchoir Choix.
+                if ("tailwind".equals(coup.showdownId())) {
+                    ventArriereAdversaire = true;
                 }
 
                 // Comptage des PP. Une capacité tirée n'en consomme aucune :
@@ -667,6 +678,9 @@ public final class ObservationCollector {
 
     private static void tenterConfirmerEcharpeChoix(String espece, Pokemon adversaireBase) {
         if (OBJETS_CONFIRMES.containsKey(espece) || OBJETS_RETIRES.contains(espece)) return;
+        // Un objet Choix déjà démenti par les faits (deux capacités
+        // différentes sans switch) ne doit jamais être reconfirmé.
+        if (OBJETS_CHOIX_EXCLUS.contains(espece)) return;
         int vitesseMinObservee = getVitesseMinObservee(espece);
         if (vitesseMinObservee <= 0) return;
 
@@ -704,6 +718,14 @@ public final class ObservationCollector {
                 avecPiedVeloce.setStatut(adversaireBase.getStatut());
                 double v = com.tropimon.randompvp.calc.DamageCalculator.vitesseEnCombat(avecPiedVeloce, meteoActuelle);
                 meilleureVitesse = Math.max(meilleureVitesse, v);
+            }
+
+            // Vent Arrière double la vitesse du camp qui l'a lancé pendant
+            // 4 tours. Il n'est pas suivi tour par tour, donc on élargit le
+            // plafond dès qu'il a été utilisé dans ce combat : mieux vaut
+            // rater un Mouchoir Choix que d'en inventer un.
+            if (ventArriereAdversaire) {
+                meilleureVitesse *= 2.0;
             }
 
             if (vitesseMinObservee > meilleureVitesse) {
@@ -864,7 +886,7 @@ public final class ObservationCollector {
      * et fausserait les dégâts sur une simple statistique de métagame — c'est
      * exactement ce qu'on a retiré pour les EV et la nature.
      *
-     * La révocation sur preuve contraire (tenterRevoquerObjetChoixProactif)
+     * La révocation sur preuve contraire (tenterRevoquerObjetChoix)
      * limiterait les dégâts mais seulement APRÈS plusieurs tours d'erreur.
      *
      * Pour la réactiver : décommenter l'appel dans construireAdversaireEstime.
@@ -899,14 +921,24 @@ public final class ObservationCollector {
     }
 
     /**
-     * Révoque une confirmation proactive d'objet Choix si elle est contredite :
-     * soit par un changement de capacité du même Pokémon sans switch entre-
-     * temps (preuve certaine - Choix verrouille sur la première capacité
-     * utilisée depuis l'entrée), soit en secours par une future détection
-     * d'impossibilité statistique (dégâts/vitesse incompatibles).
+     * Révoque TOUTE confirmation d'objet Choix contredite par les faits.
+     *
+     * Deux capacités différentes du même Pokémon sans switch entre-temps est
+     * une preuve certaine qu'il ne tient pas d'objet Choix : le verrou impose
+     * la première capacité utilisée depuis l'entrée sur le terrain.
+     *
+     * Cette révocation ne regardait au départ que OBJETS_CONFIRMES_PROACTIVEMENT,
+     * donc les confirmations issues du taux d'usage Smogon. Elle laissait
+     * intacte celle de tenterConfirmerEcharpeChoix, fondée sur la vitesse —
+     * or c'est exactement celle qui se trompe quand une hypothèse de vitesse
+     * manque au modèle. Une preuve certaine doit l'emporter sur n'importe
+     * quelle estimation, quelle qu'en soit la source.
      */
-    private static void tenterRevoquerObjetChoixProactif(String espece, String coupActuelId) {
-        if (!OBJETS_CONFIRMES_PROACTIVEMENT.contains(espece)) return;
+    private static void tenterRevoquerObjetChoix(String espece, String coupActuelId) {
+        String objet = OBJETS_CONFIRMES.get(espece);
+        boolean estObjetChoix = "Mouchoir Choix".equals(objet)
+            || "Bandeau Choix".equals(objet) || "Lunettes Choix".equals(objet);
+        if (!estObjetChoix) return;
         if (coupAdversaireTourPrecedent == null || coupActuelId == null) return;
         if (!coupAdversaireTourPrecedent.equals(coupActuelId)) {
             OBJETS_CONFIRMES.remove(espece);
@@ -1475,6 +1507,7 @@ public final class ObservationCollector {
         TALENTS_CHIP_CONFIRMES.clear();
         TALENTS_CONFIRMES.clear();
         coupAdversaireTourPrecedent = null;
+        ventArriereAdversaire = false;
         joueurVampigraine = false;
         joueurSalaison = false;
         adversaireVampigraine = false;
