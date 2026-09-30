@@ -313,13 +313,18 @@ public final class ObservationCollector {
                 OBJETS_CONFIRMES.put(adversaire.getEspece(), "Orbe Vie");
             }
 
+            // Une observation de vitesse n'est exploitable que si l'ordre
+            // d'action s'explique UNIQUEMENT par la vitesse. Tout le reste doit
+            // etre ecarte, sinon on conclut au Mouchoir Choix pour rien.
             if (Boolean.TRUE.equals(adversaireAAgiEnPremier)
                     && coupJoueurDuTour != null && coupAdversaireDuTour != null
-                    && !COUPS_PRIORITAIRES.contains(coupJoueurDuTour.showdownId())
-                    && !COUPS_PRIORITAIRES.contains(coupAdversaireDuTour.showdownId())
+                    && prioritesEgales(coupJoueurDuTour.showdownId(), coupAdversaireDuTour.showdownId())
+                    && BoostTracker.getStageAdversaire(Stat.VITESSE) <= 0
+                    && !ventArriereAdversaire
                     && !FieldTracker.isDistorsion()) {
                 int vitesseJoueur = vitesseEffectiveJoueur(joueur);
                 VITESSES_MIN_OBSERVEES.merge(adversaire.getEspece(), vitesseJoueur + 1, Math::max);
+                OBSERVATIONS_VITESSE.merge(adversaire.getEspece(), 1, Integer::sum);
             }
 
             if (coupAdversaireDuTour != null && perteJoueur >= 0.5) {
@@ -417,6 +422,32 @@ public final class ObservationCollector {
         }
     }
 
+    /**
+     * Vrai si les deux capacites ont la MEME priorite, donc si l'ordre d'action
+     * ne s'explique que par la vitesse.
+     *
+     * L'ancienne version testait l'appartenance a une liste de capacites
+     * prioritaires ecrite a la main. Elle ratait deux choses : les capacites
+     * prioritaires absentes de la liste, et surtout les priorites NEGATIVES
+     * (Avalanche, Draco-Queue, Hurlement, Contre, Riposte, Vantardise...). Une
+     * capacite a priorite negative cote joueur fait passer l'adversaire en
+     * premier quelle que soit sa vitesse — et le mod en deduisait un Mouchoir
+     * Choix. On lit donc la priorite reelle dans les donnees Cobblemon, ce qui
+     * couvre les deux sens sans liste a maintenir.
+     */
+    private static boolean prioritesEgales(String coupJoueurId, String coupAdversaireId) {
+        try {
+            MoveTemplate a = Moves.INSTANCE.getByName(coupJoueurId);
+            MoveTemplate b = Moves.INSTANCE.getByName(coupAdversaireId);
+            if (a == null || b == null) return false; // inconnue : on s'abstient
+            return a.getPriority() == b.getPriority();
+        } catch (Throwable e) {
+            // Repli sur l'ancienne liste si la donnee n'est pas accessible
+            return !COUPS_PRIORITAIRES.contains(coupJoueurId)
+                && !COUPS_PRIORITAIRES.contains(coupAdversaireId);
+        }
+    }
+
     private static int vitesseEffectiveJoueur(Pokemon joueur) {
         double v = joueur.getStatCalculee(Stat.VITESSE);
         int stage = BoostTracker.getStageJoueur(Stat.VITESSE);
@@ -426,6 +457,16 @@ public final class ObservationCollector {
         if (joueur.getStatut() == Pokemon.Statut.PARALYSIE) v *= 0.5;
         return (int) Math.floor(v);
     }
+
+    /**
+     * Nombre d'observations de vitesse exploitables par espèce. Une seule ne
+     * suffit pas à confirmer : la Vive-Griffe fait passer en premier une fois
+     * sur cinq au hasard, indépendamment de la vitesse, et aucun signal client
+     * ne permet de la distinguer. Deux observations indépendantes ramènent ce
+     * risque à 4%, et un vrai Mouchoir Choix se manifeste de toute façon à
+     * chaque tour.
+     */
+    private static final Map<String, Integer> OBSERVATIONS_VITESSE = new HashMap<>();
 
     /** Vitesse minimale observée pour une espèce adverse (0 si aucune observation). */
     public static int getVitesseMinObservee(String espece) {
@@ -683,6 +724,8 @@ public final class ObservationCollector {
         if (OBJETS_CHOIX_EXCLUS.contains(espece)) return;
         int vitesseMinObservee = getVitesseMinObservee(espece);
         if (vitesseMinObservee <= 0) return;
+        // Une seule observation ne suffit pas (Vive-Griffe, voir OBSERVATIONS_VITESSE)
+        if (OBSERVATIONS_VITESSE.getOrDefault(espece, 0) < 2) return;
 
         try {
             Set<String> talentsPossibles = getTalentsReelsEspece(adversaireBase);
@@ -720,6 +763,15 @@ public final class ObservationCollector {
                 meilleureVitesse = Math.max(meilleureVitesse, v);
             }
 
+            // Boosts de vitesse adverses (Danse Draco, Agilité, Nitrocharge,
+            // Hâte...) : le plafond théorique est construit sans stage, alors
+            // que le Pokémon boosté va légitimement plus vite. Sans ça, tout
+            // adversaire qui se boost devient un porteur de Mouchoir Choix.
+            int stageAdv = BoostTracker.getStageAdversaire(Stat.VITESSE);
+            if (stageAdv > 0) {
+                meilleureVitesse = meilleureVitesse * (2.0 + stageAdv) / 2.0;
+            }
+
             // Vent Arrière double la vitesse du camp qui l'a lancé pendant
             // 4 tours. Il n'est pas suivi tour par tour, donc on élargit le
             // plafond dès qu'il a été utilisé dans ce combat : mieux vaut
@@ -727,6 +779,12 @@ public final class ObservationCollector {
             if (ventArriereAdversaire) {
                 meilleureVitesse *= 2.0;
             }
+
+            // Marge de sécurité : on ne conclut qu'au-delà d'un écart net.
+            // Un dépassement de quelques points relève plus probablement d'une
+            // hypothèse manquante au modèle que d'un objet, alors qu'un vrai
+            // Mouchoir Choix apporte +50%.
+            meilleureVitesse *= 1.10;
 
             if (vitesseMinObservee > meilleureVitesse) {
                 OBJETS_CONFIRMES.put(espece, "Mouchoir Choix");
@@ -1524,6 +1582,7 @@ public final class ObservationCollector {
         especeJoueurSuivie = null;
         OBJETS_RETIRES.clear();
         VITESSES_MIN_OBSERVEES.clear();
+        OBSERVATIONS_VITESSE.clear();
         BoostTracker.reinitialiser();
         TypeTracker.reinitialiser();
         FieldTracker.reinitialiser();
