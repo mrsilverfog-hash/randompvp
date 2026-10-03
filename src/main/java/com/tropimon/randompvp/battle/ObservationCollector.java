@@ -73,6 +73,8 @@ public final class ObservationCollector {
 
     /** Vent Arrière a été lancé par le camp adverse dans ce combat. */
     private static boolean ventArriereAdversaire = false;
+    /** Symétrique, pour le camp du joueur. */
+    private static boolean ventArriereJoueur = false;
 
     // Capacités qui soignent leur utilisateur : excluent la confirmation de Restes
     private static final Set<String> COUPS_SOIN_OU_DRAIN = Set.of(
