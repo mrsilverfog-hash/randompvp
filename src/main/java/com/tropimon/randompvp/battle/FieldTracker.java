@@ -185,6 +185,18 @@ public final class FieldTracker {
                     if (allie) { auroraVeilJoueur = debut; if (debut) toursEcransJoueurRestants = dureeEcran(); }
                     else { auroraVeilAdversaire = debut; if (debut) { toursEcransAdversaireRestants = dureeEcran(); capturerPoseurEcran(); } }
                 }
+                case "tailwind" -> {
+                    // Vent Arrière : x2 vitesse pour tout le camp, 4 tours.
+                    // Même famille de messages que les écrans, donc même
+                    // fiabilité — pas une déduction par comportement.
+                    if (allie) {
+                        tailwindJoueur = debut;
+                        toursTailwindJoueurRestants = debut ? 4 : 0;
+                    } else {
+                        tailwindAdversaire = debut;
+                        toursTailwindAdversaireRestants = debut ? 4 : 0;
+                    }
+                }
                 case "stealthrock" -> {
                     if (allie) stealthRockJoueur = debut; else stealthRockAdversaire = debut;
                 }
@@ -282,6 +294,16 @@ public final class FieldTracker {
     private static int toursEcransAdversaireRestants = 0;
     private static int toursEcransJoueurRestants = 0;
 
+    private static boolean tailwindJoueur = false;
+    private static boolean tailwindAdversaire = false;
+    private static int toursTailwindJoueurRestants = 0;
+    private static int toursTailwindAdversaireRestants = 0;
+
+    public static boolean isTailwindJoueur() { return tailwindJoueur; }
+    public static boolean isTailwindAdversaire() { return tailwindAdversaire; }
+    public static int getToursTailwindJoueurRestants() { return toursTailwindJoueurRestants; }
+    public static int getToursTailwindAdversaireRestants() { return toursTailwindAdversaireRestants; }
+
     public static int getToursMeteoRestants() { return toursMeteoRestants; }
     public static int getToursEcransAdversaireRestants() { return toursEcransAdversaireRestants; }
     public static int getToursEcransJoueurRestants() { return toursEcransJoueurRestants; }
@@ -325,6 +347,8 @@ public final class FieldTracker {
         if (futureSightJoueurTours > 0) futureSightJoueurTours--;
         if (futureSightAdversaireTours > 0) futureSightAdversaireTours--;
         if (toursEcransJoueurRestants > 0) toursEcransJoueurRestants--;
+        if (toursTailwindJoueurRestants > 0 && --toursTailwindJoueurRestants == 0) tailwindJoueur = false;
+        if (toursTailwindAdversaireRestants > 0 && --toursTailwindAdversaireRestants == 0) tailwindAdversaire = false;
         if (toursEcransAdversaireRestants > 0) {
             toursEcransAdversaireRestants--;
             // Le mur dure encore alors que notre hypothèse de départ (5
@@ -374,6 +398,10 @@ public final class FieldTracker {
         toursMeteoRestants = 0;
         toursEcransAdversaireRestants = 0;
         toursEcransJoueurRestants = 0;
+        tailwindJoueur = false;
+        tailwindAdversaire = false;
+        toursTailwindJoueurRestants = 0;
+        toursTailwindAdversaireRestants = 0;
         substituteJoueur = false;
         substituteAdversaire = false;
         futureSightJoueurTours = 0;

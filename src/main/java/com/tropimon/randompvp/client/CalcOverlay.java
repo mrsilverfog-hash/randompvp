@@ -170,8 +170,8 @@ public final class CalcOverlay implements HudRenderCallback {
         }
 
         // Vitesses effectives (Distorsion inverse la priorité)
-        int vitJoueur = vitesseEffective(joueur);
-        int vitAdversaire = Math.max(vitesseEffective(adversaire),
+        int vitJoueur = vitesseEffective(joueur, true);
+        int vitAdversaire = Math.max(vitesseEffective(adversaire, false),
             ObservationCollector.getVitesseMinObservee(adversaireBase.getEspece()));
         // Symétrique : si le joueur a déjà prouvé être plus rapide dans ce
         // combat (mêmes garde-fous que pour le plancher ci-dessus), ça
@@ -701,6 +701,14 @@ public final class CalcOverlay implements HudRenderCallback {
 
         if (hypo.immunise) return null;
         return String.format(" (%.0f%% - %.0f%%)", hypo.pourcentageMin, hypo.pourcentageMax);
+    }
+
+    private static int vitesseEffective(Pokemon p, boolean estJoueur) {
+        Field f = FieldTracker.construireField();
+        boolean ventArriere = estJoueur
+            ? FieldTracker.isTailwindJoueur()
+            : FieldTracker.isTailwindAdversaire();
+        return (int) DamageCalculator.vitesseEnCombat(p, f.getMeteo(), f.getTerrain(), ventArriere);
     }
 
     private static int vitesseEffective(Pokemon p) {
