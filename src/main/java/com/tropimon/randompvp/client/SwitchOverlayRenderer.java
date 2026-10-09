@@ -79,9 +79,8 @@ public final class SwitchOverlayRenderer {
         List<Integer> couleurs = new ArrayList<>();
 
         // Vitesses (Distorsion inverse la priorité)
-        int vitCandidat = vitesseEffective(candidat, false);
-        int vitAdversaire = Math.max(vitesseEffective(adversaire, true),
-            ObservationCollector.getVitesseMinObservee(adversaireBase.getEspece()));
+        int vitCandidat = vitesseCandidat(candidat);
+        int vitAdversaire = vitesseAdversaire(adversaire, adversaireBase.getEspece());
         boolean distorsion = FieldTracker.isDistorsion();
         boolean candidatPremier = distorsion ? vitCandidat < vitAdversaire : vitCandidat > vitAdversaire;
         boolean egalite = vitCandidat == vitAdversaire;
@@ -250,39 +249,38 @@ public final class SwitchOverlayRenderer {
         return true;
     }
 
-    private static int vitesseEffective(Pokemon p, boolean appliquerStages) {
-        if (appliquerStages) {
-            Field f = FieldTracker.construireField();
-            // Equipe du joueur : c'est son propre Vent Arrière qui s'applique.
-            return (int) DamageCalculator.vitesseEnCombat(p, f.getMeteo(), f.getTerrain(),
+    /**
+     * Vitesse du candidat qui entre : ses stages repartent de zéro (sauf -1 de
+     * Toile Gluante s'il est au sol), mais le Vent Arrière DU JOUEUR continue
+     * de s'appliquer (effet de camp, il survit au switch).
+     */
+    private static int vitesseCandidat(Pokemon candidat) {
+        Field f = FieldTracker.construireField();
+        int stageOriginal = candidat.getStage(Stat.VITESSE);
+        int stageEntree = (FieldTracker.isStickyWebJoueur() && DamageCalculator.estAuSol(candidat)) ? -1 : 0;
+        candidat.setStage(Stat.VITESSE, stageEntree);
+        try {
+            return (int) DamageCalculator.vitesseEnCombat(candidat, f.getMeteo(), f.getTerrain(),
                 FieldTracker.isTailwindJoueur());
+        } finally {
+            candidat.setStage(Stat.VITESSE, stageOriginal);
         }
-        // Sans stages (candidat qui rentre) : vitesse de base + objet + statut + météo
-        Pokemon copie = p;
-        double v = copie.getStatCalculee(Stat.VITESSE);
-        if ("Mouchoir Choix".equals(copie.getObjet())) v *= 1.5;
-        String talent = copie.getTalent();
-        var meteo = FieldTracker.construireField().getMeteo();
-        boolean soleil = meteo == com.tropimon.randompvp.calc.Field.Meteo.SOLEIL
-            || meteo == com.tropimon.randompvp.calc.Field.Meteo.SOLEIL_INTENSE;
-        boolean pluie = meteo == com.tropimon.randompvp.calc.Field.Meteo.PLUIE
-            || meteo == com.tropimon.randompvp.calc.Field.Meteo.PLUIE_INTENSE;
-        if (("Chlorophylle".equals(talent) && soleil)
-            || ("Glissade".equals(talent) && pluie)
-            || ("Baigne Sable".equals(talent) && meteo == com.tropimon.randompvp.calc.Field.Meteo.SABLE)
-            || ("Chasse-Neige".equals(talent) && meteo == com.tropimon.randompvp.calc.Field.Meteo.NEIGE)) {
-            v *= 2.0;
+    }
+
+    /**
+     * Vitesse de l'adversaire : SON Vent Arrière (pas celui du joueur, comme
+     * avant), et seulement un objet confirmé (pas la supposition Smogon).
+     */
+    private static int vitesseAdversaire(Pokemon adversaire, String espece) {
+        Field f = FieldTracker.construireField();
+        String objetOriginal = adversaire.getObjet();
+        if (!ObservationCollector.estObjetConfirme(espece)) adversaire.setObjet(null);
+        try {
+            return (int) DamageCalculator.vitesseEnCombat(adversaire, f.getMeteo(), f.getTerrain(),
+                FieldTracker.isTailwindAdversaire());
+        } finally {
+            adversaire.setObjet(objetOriginal);
         }
-        if (copie.getStatut() == Pokemon.Statut.PARALYSIE) v *= 0.5;
-        // Toile Gluante (-1 Vitesse à l'entrée) : le texte informatif
-        // "Toile : -1 Vit" existait déjà plus haut, mais cette baisse
-        // n'était jamais appliquée au calcul de vitesse lui-même - un
-        // candidat pouvait donc sembler plus rapide que l'adversaire alors
-        // qu'avec le vrai -1 stage il serait en réalité plus lent.
-        if (FieldTracker.isStickyWebJoueur() && DamageCalculator.estAuSol(copie)) {
-            v *= 2.0 / 3.0;
-        }
-        return (int) Math.floor(v);
     }
 
     private static com.tropimon.randompvp.calc.Move convertirCapacite(Move coup) {

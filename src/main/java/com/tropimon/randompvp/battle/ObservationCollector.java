@@ -505,14 +505,17 @@ public final class ObservationCollector {
     }
 
     private static int vitesseEffectiveJoueur(Pokemon joueur) {
-        double v = joueur.getStatCalculee(Stat.VITESSE);
-        int stage = BoostTracker.getStageJoueur(Stat.VITESSE);
-        if (stage >= 0) v = v * (2.0 + stage) / 2.0;
-        else v = v * 2.0 / (2.0 - stage);
-        if ("Mouchoir Choix".equals(joueur.getObjet())) v *= 1.5;
-        if (joueur.getStatut() == Pokemon.Statut.PARALYSIE) v *= 0.5;
-        if (FieldTracker.isTailwindJoueur()) v *= 2.0;
-        return (int) Math.floor(v);
+        // Même formule que le HUD (arrondis exacts, talents météo compris),
+        // avec le stage suivi par BoostTracker.
+        int stageOriginal = joueur.getStage(Stat.VITESSE);
+        joueur.setStage(Stat.VITESSE, BoostTracker.getStageJoueur(Stat.VITESSE));
+        try {
+            Field champ = FieldTracker.construireField();
+            return (int) DamageCalculator.vitesseEnCombat(joueur, champ.getMeteo(), champ.getTerrain(),
+                FieldTracker.isTailwindJoueur());
+        } finally {
+            joueur.setStage(Stat.VITESSE, stageOriginal);
+        }
     }
 
     /**
@@ -1599,12 +1602,21 @@ public final class ObservationCollector {
                 && joueur.getStatut() != Pokemon.Statut.PARALYSIE
                 && adversaire.getStatut() != Pokemon.Statut.PARALYSIE
                 && !FieldTracker.isDistorsion()) {
-            int vitesseMaxSansObjet = (int) Math.floor(
-                ((2 * adversaire.getStatBase(Stat.VITESSE) + 31 + 63) * adversaire.getNiveau()) / 100.0 + 5) * 11 / 10;
-            int vitesseJoueurReelle = joueur.getStatCalculee(Stat.VITESSE);
-            int stageJoueur = joueur.getStage(Stat.VITESSE);
-            double mult = stageJoueur >= 0 ? (2.0 + stageJoueur) / 2.0 : 2.0 / (2.0 - stageJoueur);
-            vitesseJoueurReelle = (int) (vitesseJoueurReelle * mult);
+            // Random battle : vitesse adverse exacte (31 IV / 85 EV / neutre),
+            // et non plus le maximum TropiCalc (252 EV + nature boostante) qui
+            // surestimait l'adversaire et empêchait presque toute détection.
+            // Plafond SANS objet : son stage réel, son Vent Arrière, x2 si une
+            // météo est active (talent météo possible), +10% de marge.
+            Pokemon sansObjet = construireAdversaireEstime(adversaire);
+            sansObjet.setObjet(null);
+            sansObjet.setStatut(Pokemon.Statut.AUCUN);
+            sansObjet.setStage(Stat.VITESSE, Math.max(0, BoostTracker.getStageAdversaire(Stat.VITESSE)));
+            Field champ = FieldTracker.construireField();
+            double plafond = DamageCalculator.vitesseEnCombat(sansObjet, champ.getMeteo(), champ.getTerrain(),
+                FieldTracker.isTailwindAdversaire());
+            if (champ.getMeteo() != null && champ.getMeteo() != Field.Meteo.AUCUNE) plafond *= 2.0;
+            int vitesseMaxSansObjet = (int) Math.floor(plafond * 1.10);
+            int vitesseJoueurReelle = vitesseEffectiveJoueur(joueur);
             if (vitesseMaxSansObjet < vitesseJoueurReelle) {
                 OBJETS_CONFIRMES.put(espece, "Mouchoir Choix");
             }

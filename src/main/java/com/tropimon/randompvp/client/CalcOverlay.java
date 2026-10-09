@@ -169,17 +169,19 @@ public final class CalcOverlay implements HudRenderCallback {
             y += hauteurLigne;
         }
 
-        // Vitesses effectives (Distorsion inverse la priorité)
+        // Vitesses effectives (Distorsion inverse la priorité).
+        // Random battle : la stat de vitesse adverse est EXACTE (31 IV / 85 EV /
+        // neutre / niveau lu). L'ancien plancher/plafond hérité de TropiCalc
+        // (vitesses min/max déduites de l'ordre d'action) est supprimé : il
+        // figeait une vitesse EFFECTIVE observée sous d'anciennes conditions
+        // (boost, paralysie, Vent Arrière, météo...) et l'imposait ensuite
+        // alors que ces conditions avaient changé. L'ordre d'action ne sert
+        // plus qu'à confirmer un Mouchoir Choix (ObservationCollector).
         int vitJoueur = vitesseEffective(joueur, true);
-        int vitAdversaire = Math.max(vitesseEffective(adversaire, false),
-            ObservationCollector.getVitesseMinObservee(adversaireBase.getEspece()));
-        // Symétrique : si le joueur a déjà prouvé être plus rapide dans ce
-        // combat (mêmes garde-fous que pour le plancher ci-dessus), ça
-        // plafonne aussi l'estimation - une estimation Smogon par défaut
-        // peut sinon rester trop haute même après une preuve claire du
-        // contraire observée en combat.
-        vitAdversaire = Math.min(vitAdversaire,
-            ObservationCollector.getVitesseMaxObservee(adversaireBase.getEspece()));
+        String especeAdvVit = adversaireBase.getEspece();
+        boolean objetAdvConnu = ObservationCollector.estObjetConfirme(especeAdvVit);
+        int vitAdversaire = vitesseAdversaireAffichee(adversaire, objetAdvConnu
+            ? adversaire.getObjet() : null);
         boolean distorsion = FieldTracker.isDistorsion();
         boolean joueurPremier = distorsion ? vitJoueur < vitAdversaire : vitJoueur > vitAdversaire;
         boolean egalite = vitJoueur == vitAdversaire;
@@ -192,10 +194,10 @@ public final class CalcOverlay implements HudRenderCallback {
         // Hypothèse Mouchoir Choix : sa vitesse x1.5 s'il en tenait un.
         // Affiché en bleu entre parenthèses tant que ce n'est pas déjà son objet
         // connu, pour anticiper le pire cas de priorité.
-        String objetAdversaire = adversaire.getObjet();
-        boolean mouchoirDejaPris = "Mouchoir Choix".equals(objetAdversaire);
-        if (!mouchoirDejaPris) {
-            int vitMouchoir = (int) Math.floor(vitAdversaire * 1.5);
+        // Seul un objet CONFIRMÉ compte : l'objet Smogon le plus joué n'est
+        // qu'une supposition et ne doit pas multiplier la vitesse affichée.
+        if (!objetAdvConnu) {
+            int vitMouchoir = vitesseAdversaireAffichee(adversaire, "Mouchoir Choix");
             String texteMouchoir = String.format(" (%d)", vitMouchoir);
             int largeur = client.textRenderer.getWidth(texteVitesse);
             dessinerTexte(texteMouchoir, x + largeur, y, COULEUR_MOUCHOIR);
@@ -709,6 +711,17 @@ public final class CalcOverlay implements HudRenderCallback {
             ? FieldTracker.isTailwindJoueur()
             : FieldTracker.isTailwindAdversaire();
         return (int) DamageCalculator.vitesseEnCombat(p, f.getMeteo(), f.getTerrain(), ventArriere);
+    }
+
+    /** Vitesse adverse calculée avec l'objet donné (null = sans objet). */
+    private static int vitesseAdversaireAffichee(Pokemon adversaire, String objet) {
+        String original = adversaire.getObjet();
+        adversaire.setObjet(objet);
+        try {
+            return vitesseEffective(adversaire, false);
+        } finally {
+            adversaire.setObjet(original);
+        }
     }
 
     private static int vitesseEffective(Pokemon p) {

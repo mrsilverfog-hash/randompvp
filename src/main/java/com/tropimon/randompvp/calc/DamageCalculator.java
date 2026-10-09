@@ -526,29 +526,26 @@ public class DamageCalculator {
         return puissance;
     }
 
-    /** Vitesse en combat : stages, Mouchoir Choix, paralysie, talents météo. */
     /**
-     * Vitesse en combat, Vent Arrière compris.
-     *
-     * Vent Arrière double la vitesse de TOUT un camp pendant 4 tours. C'est un
-     * effet de côté, pas une propriété du Pokémon : la fonction ne peut donc
-     * pas le déduire de p seul, le camp doit lui être passé. Les surcharges
-     * sans ce paramètre supposent l'absence de Vent Arrière.
+     * Vitesse en combat, Vent Arrière compris, avec les arrondis exacts du jeu
+     * (moteur Showdown utilisé par Cobblemon) :
+     *  1. stat x stage, arrondie à l'inférieur ;
+     *  2. tous les modificateurs (Mouchoir Choix, talents météo, Proto-Synthèse /
+     *     Moteur Quark, Pied Véloce, Vent Arrière) chaînés en base 4096 puis
+     *     appliqués en une fois avec l'arrondi "pokeRound" (0,5 arrondi vers le bas) ;
+     *  3. paralysie en dernier : moitié arrondie à l'inférieur (sauf Pied Véloce).
+     * Multiplier des doubles puis arrondir à la fin donnait des écarts de 1 à 2
+     * points, suffisants pour inverser un speed tie affiché.
      */
     public static double vitesseEnCombat(Pokemon p, Field.Meteo meteo, Field.TypeTerrain terrain,
                                          boolean ventArriere) {
-        double v = vitesseEnCombat(p, meteo, terrain);
-        if (ventArriere) v = Math.floor(v * 2.0);
-        return v;
-    }
+        int v = p.getStatCalculee(Stat.VITESSE);
+        int stage = Math.max(-6, Math.min(6, p.getStage(Stat.VITESSE)));
+        if (stage >= 0) v = (v * (2 + stage)) / 2;
+        else v = (v * 2) / (2 - stage);
 
-    public static double vitesseEnCombat(Pokemon p, Field.Meteo meteo, Field.TypeTerrain terrain) {
-        double v = p.getStatCalculee(Stat.VITESSE);
-        int stage = p.getStage(Stat.VITESSE);
-        if (stage >= 0) v = v * (2.0 + stage) / 2.0;
-        else v = v * 2.0 / (2.0 - stage);
-        if ("Mouchoir Choix".equals(p.getObjet())) v *= 1.5;
-        // Talents doublant la vitesse sous leur météo
+        int chaine = 4096;
+        if ("Mouchoir Choix".equals(p.getObjet())) chaine = chainer(chaine, 6144);
         String talent = p.getTalent();
         boolean soleil = meteo == Field.Meteo.SOLEIL || meteo == Field.Meteo.SOLEIL_INTENSE;
         boolean pluie = meteo == Field.Meteo.PLUIE || meteo == Field.Meteo.PLUIE_INTENSE;
@@ -556,20 +553,35 @@ public class DamageCalculator {
             || ("Glissade".equals(talent) && pluie)
             || ("Baigne Sable".equals(talent) && meteo == Field.Meteo.SABLE)
             || ("Chasse-Neige".equals(talent) && meteo == Field.Meteo.NEIGE)) {
-            v *= 2.0;
+            chaine = chainer(chaine, 8192);
         }
         if (Stat.VITESSE == statLaPlusHaute(p) && estBoostParadox(p, meteo, terrain)) {
-            v *= 1.5;
+            chaine = chainer(chaine, 6144);
         }
-        // Pied Véloce (Quick Feet) : +50% sous n'importe quel statut, et
-        // ignore le malus de paralysie habituel (sinon net une pénalité)
         boolean piedVeloce = "Pied Véloce".equals(talent) && p.getStatut() != Pokemon.Statut.AUCUN;
-        if (piedVeloce) {
-            v *= 1.5;
-        } else if (p.getStatut() == Pokemon.Statut.PARALYSIE) {
-            v *= 0.5;
+        if (piedVeloce) chaine = chainer(chaine, 6144);
+        if (ventArriere) chaine = chainer(chaine, 8192);
+        v = pokeRound(v * (long) chaine / 4096.0);
+
+        if (!piedVeloce && p.getStatut() == Pokemon.Statut.PARALYSIE) {
+            v = v / 2;
         }
-        return Math.floor(v);
+        return v;
+    }
+
+    /** Vitesse en combat sans Vent Arrière. */
+    public static double vitesseEnCombat(Pokemon p, Field.Meteo meteo, Field.TypeTerrain terrain) {
+        return vitesseEnCombat(p, meteo, terrain, false);
+    }
+
+    /** Chaînage de modificateurs Showdown (base 4096). */
+    private static int chainer(int chaine, int mod) {
+        return (int) ((chaine * (long) mod + 2048) >> 12);
+    }
+
+    /** Arrondi Showdown : partie décimale > 0,5 => supérieur, sinon inférieur. */
+    private static int pokeRound(double x) {
+        return (x % 1 > 0.5) ? (int) Math.ceil(x) : (int) Math.floor(x);
     }
 
     // Compatibilité : ancien appel sans terrain (Moteur Quark alors ignoré)

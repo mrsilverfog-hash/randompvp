@@ -141,3 +141,10 @@ Plusieurs conversations/l'utilisateur lui-même ont travaillé directement sur c
 
 ## Note de sécurité
 Token GitHub à révoquer et régénérer entre les sessions (fine-grained, dépôt `randompvp` seul, Contents lecture/écriture). Un run de build anormalement lent s'est résolu par annulation + commit vide — pas nécessairement lié au code.
+
+## Vitesse (correctif 2026-10-09)
+- Plus de plancher/plafond "vitesse min/max observée" sur l'affichage (HUD et écran de switch) : en random battle la stat adverse est exacte ; ces bornes figeaient une vitesse effective observée sous d'anciennes conditions et faussaient l'affichage en direct. Les observations ne servent plus qu'à confirmer un Mouchoir Choix.
+- Vitesse adverse affichée avec l'objet CONFIRMÉ uniquement (plus l'objet Smogon supposé) ; le "(xxx)" bleu = hypothèse Mouchoir Choix tant que l'objet n'est pas connu.
+- `DamageCalculator.vitesseEnCombat` : arrondis Showdown (floor après stage, modificateurs chaînés en base 4096 + pokeRound, Vent Arrière dans la chaîne, paralysie en dernier floor /2).
+- Écran de switch : l'adversaire prend SON Vent Arrière (prenait celui du joueur) ; le candidat garde le Vent Arrière du joueur, stage 0 (ou -1 Toile Gluante).
+- Détection directe Mouchoir Choix : plafond sans objet calculé au format random (85 EV / neutre) au lieu de 252 EV + nature.
