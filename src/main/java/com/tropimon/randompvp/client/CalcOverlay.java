@@ -668,32 +668,6 @@ public final class CalcOverlay implements HudRenderCallback {
             y += 4;
             dessinerTexte("Objet confirmé : aucun (retiré)", x, y, COULEUR_REVELE);
             y += hauteurLigne;
-
-            if (profil != null && profil.getNbObservations() >= 3) {
-                StatHypothesis hypDef = profil.defense.nombreObservations >= profil.defenseSpe.nombreObservations
-                    ? profil.defense : profil.defenseSpe;
-                dessinerTexte(String.format("Inférence Def EV %d-%d", hypDef.evMin, hypDef.evMax), x, y, COULEUR_TEXTE);
-                y += hauteurLigne;
-            }
-
-            // Objet : uniquement affiché quand on SAIT (jamais une supposition).
-            // Casque Brut / Restes : détectés par le motif de chip/soin.
-            // Mouchoir Choix : il agit avant alors que sa vitesse max sans objet
-            // ne le permettrait pas. Bandeau/Lunettes Choix : ratio net x1.5.
-            // Orbe Vie : ratio net x1.3 + son propre recul de ~10% le même tour.
-            String objetConfirme = ObservationCollector.getObjetConfirme(especeAdv);
-            boolean objetRetire = ObservationCollector.estObjetConfirme(especeAdv) && objetConfirme == null;
-            if (objetConfirme != null) {
-                String raison = ObservationCollector.getRaisonObjet(especeAdv);
-                dessinerTexte("Objet confirmé : " + objetConfirme + " ✓"
-                    + (raison != null ? " (" + raison + ")" : "")
-                    + " [" + com.tropimon.randompvp.ModToggle.nomToucheAnnuler() + " : annuler]",
-                    x, y, COULEUR_REVELE);
-                y += hauteurLigne;
-            } else if (objetRetire) {
-                dessinerTexte("Objet confirmé : aucun (retiré)", x, y, COULEUR_REVELE);
-                y += hauteurLigne;
-            }
         }
 
         // Lignes trop longues : coupées et les suivantes décalées vers le bas.
