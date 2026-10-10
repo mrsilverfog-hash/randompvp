@@ -157,3 +157,4 @@ Adaptations random battle :
 - Vitesse affichée : on garde la version RandomPvP (exacte, sans plancher/plafond, sans "max" TropiCalc qui ferait doublon).
 - Ancien `tenterConfirmerEcharpeChoix` et `detecterObjetOffensifParSignal` retirés comme dans TropiCalc (remplacés par l'analyse au tour).
 - Appelantes (Blabladodo/Métronome) côté PP conservées (propre à RandomPvP).
+- 2026-10-10 soir : port de TropiCalc 8aafc82 (objets adverses) : plus de "Ballon estimé + touché = éclaté", Ballon confirmé par l'annonce d'entrée (sinon objet Smogon suivant après 6 s), tout enditem.X marque l'objet perdu et efface la confirmation, baie de résistance = simple ligne de log, confirmation par élimination seulement si "aucun objet" est exclu, tick() ne remet à zéro qu'une fois hors combat (journal qui débordait).
