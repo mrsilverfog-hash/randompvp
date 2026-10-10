@@ -14,7 +14,7 @@ public final class SetInferenceEngine {
 
     public static final Set<String> TALENTS_OFFENSIFS = Set.of(
         "Cran", "Agitation", "Adaptabilité", "Technicien", "Poing de Fer",
-        "Mâchoire Brute", "Force Sable", "Verres Teintés", "Sans Limite", "Télécharge",
+        "Prognathe", "Force Sable", "Lentiteintée", "Sans Limite", "Télécharge",
         "Coloforce", "Force Pure", "Griffe Dure", "Rage Poison", "Rage Brûlure",
         "Pouls Orichalque", "Moteur Hadron", "Dent de Dragon", "Œil Révélateur",
         "Aquabulle", "Porte-Roche", "Général Suprême", "Tranchant", "Transistor",
@@ -28,7 +28,7 @@ public final class SetInferenceEngine {
     );
 
     public static final Set<String> TALENTS_DEFENSIFS = Set.of(
-        "Isograisse", "Filtre", "Solide Roc", "Multi-écailles", "Spectro-Bouclier",
+        "Isograisse", "Filtre", "Solide Roc", "Multiécaille", "Spectro-Bouclier",
         "Régé-Force", "Médic Nature", "Sel Purificateur", "Bien Cuit", "Prisme-Armure",
         "Absorb'Eau", "Absorb'Volt", "Absorbe-Terre", "Anti-Bruit", "Aquabulle",
         "Boule de Poils", "Garde Mystik", "Herbivore", "Lavabo", "Lucidité",
@@ -84,7 +84,7 @@ public final class SetInferenceEngine {
         hypothese.nombreObservations++;
     }
 
-    private static Pokemon construirePokemonHypothetique(Pokemon base, String objet, String talent) {
+    public static Pokemon construirePokemonHypothetique(Pokemon base, String objet, String talent) {
         Pokemon.Builder b = Pokemon.builder(base.getEspece(), base.getNiveau(), base.getType1(), base.getType2())
             .statBase(Stat.PV, base.getStatBase(Stat.PV))
             .statBase(Stat.ATTAQUE, base.getStatBase(Stat.ATTAQUE))
@@ -102,6 +102,7 @@ public final class SetInferenceEngine {
         if (!StatHypothesis.AUCUN.equals(talent)) b.talent(talent);
 
         Pokemon p = b.build();
+        p.setCampAdverse(base.isCampAdverse());
         p.setStatut(base.getStatut());
         p.setPvActuels(base.getPvActuels());
         for (Stat s : Stat.values()) {

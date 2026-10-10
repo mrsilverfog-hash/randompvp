@@ -148,3 +148,12 @@ Token GitHub à révoquer et régénérer entre les sessions (fine-grained, dép
 - `DamageCalculator.vitesseEnCombat` : arrondis Showdown (floor après stage, modificateurs chaînés en base 4096 + pokeRound, Vent Arrière dans la chaîne, paralysie en dernier floor /2).
 - Écran de switch : l'adversaire prend SON Vent Arrière (prenait celui du joueur) ; le candidat garde le Vent Arrière du joueur, stage 0 (ou -1 Toile Gluante).
 - Détection directe Mouchoir Choix : plafond sans objet calculé au format random (85 EV / neutre) au lieu de 252 EV + nature.
+
+## Rapatriement TropiCalc be8c6d5..d5540c9 (2026-10-10)
+Porté par fusion 3-way (base = TropiCalc be8c6d5^ renommé, cible = d5540c9 renommé). Repris tel quel : Change-Côté, filet de sécurité d'objet du joueur (`appliquerObjetReelJoueur`, aussi dans l'écran de switch), Orbe Vie confirmé par le message de recul, icônes du panneau d'équipe, compteur de Repos (joueur + adversaire, Matinal), Général Suprême, 18 objets x1.2, Champ'Duit, log de debug compact avec lignes d'analyse prévu/réel, 22 talents + 4 noms corrigés, 13 capacités à puissance variable, HUD (raison de la confirmation d'objet, touche F7 d'annulation), formule de dégâts alignée sur Showdown + tests JUnit (`src/test`, cas générés par `tools/reference-calc`).
+Adaptations random battle :
+- Mouchoir Choix (`conclureAdversairePlusRapide`) : vitesse sans objet = 85 EV / neutre (exacte), seule l'incertitude du talent reste. Étape "réglages de vitesse Smogon" supprimée (aucun réglage à deviner).
+- Bandeau/Lunettes Choix (`analyserCoupRecu`) : maximum sans objet calculé en 85 EV / neutre au lieu de 252 EV + nature boostante.
+- Vitesse affichée : on garde la version RandomPvP (exacte, sans plancher/plafond, sans "max" TropiCalc qui ferait doublon).
+- Ancien `tenterConfirmerEcharpeChoix` et `detecterObjetOffensifParSignal` retirés comme dans TropiCalc (remplacés par l'analyse au tour).
+- Appelantes (Blabladodo/Métronome) côté PP conservées (propre à RandomPvP).

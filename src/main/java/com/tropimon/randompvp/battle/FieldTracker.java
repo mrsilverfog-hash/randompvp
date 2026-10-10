@@ -98,6 +98,10 @@ public final class FieldTracker {
     /** Même principe que poseurEcranAdversaire, mais pour le terrain (peut être posé par n'importe quel camp). */
     private static String poseurTerrainAdversaire = null;
     private static boolean correctionChampDuitAppliquee = false;
+    // Messages de tour reçus depuis le début du champ en cours, et durée
+    // supposée au départ (5, ou 8 si Champ'Duit déjà connu).
+    private static int toursDepuisDebutTerrain = 0;
+    private static int dureeTerrainInitiale = 5;
 
     public static int getToursTerrainRestants() { return toursTerrainRestants; }
 
@@ -186,9 +190,12 @@ public final class FieldTracker {
                     else { auroraVeilAdversaire = debut; if (debut) { toursEcransAdversaireRestants = dureeEcran(); capturerPoseurEcran(); } }
                 }
                 case "tailwind" -> {
-                    // Vent Arrière : x2 vitesse pour tout le camp, 4 tours.
-                    // Même famille de messages que les écrans, donc même
-                    // fiabilité — pas une déduction par comportement.
+                    // Vent Arrière : x2 vitesse pour tout le camp, 4 tours. Même
+                    // famille de messages que les écrans et les pièges, donc suivi
+                    // par camp avec sa durée réelle plutôt que déduit d'un
+                    // comportement. Nom d'effet non capturé dans les logs
+                    // disponibles : déduit de la convention des autres (reflect,
+                    // lightscreen, stealthrock...), à confirmer en jeu.
                     if (allie) {
                         tailwindJoueur = debut;
                         toursTailwindJoueurRestants = debut ? 4 : 0;
@@ -262,7 +269,10 @@ public final class FieldTracker {
                 toursTerrainRestants = 0;
             } else {
                 toursTerrainRestants = dureeTerrain();
-                capturerPoseurTerrain();
+                dureeTerrainInitiale = toursTerrainRestants;
+                toursDepuisDebutTerrain = 0;
+                Object[] argsTerrain = contenu.getArgs();
+                capturerPoseurTerrain(argsTerrain.length > 0 ? argsTerrain[0] : null);
             }
         }
     }
@@ -304,6 +314,11 @@ public final class FieldTracker {
     public static int getToursTailwindJoueurRestants() { return toursTailwindJoueurRestants; }
     public static int getToursTailwindAdversaireRestants() { return toursTailwindAdversaireRestants; }
 
+    /** Protection=1, Mur Lumière=2, Voile Aurore=4 : pour savoir si mes écrans ont bougé pendant un tour. */
+    public static int signatureEcransJoueur() {
+        return (reflectJoueur ? 1 : 0) | (lightScreenJoueur ? 2 : 0) | (auroraVeilJoueur ? 4 : 0);
+    }
+
     public static int getToursMeteoRestants() { return toursMeteoRestants; }
     public static int getToursEcransAdversaireRestants() { return toursEcransAdversaireRestants; }
     public static int getToursEcransJoueurRestants() { return toursEcransJoueurRestants; }
@@ -333,9 +348,20 @@ public final class FieldTracker {
         }
     }
 
-    private static void capturerPoseurTerrain() {
+    /**
+     * Le message fieldstart désigne le poseur (owned_pokemon(dresseur, espèce),
+     * vu en log). L'ancienne version attribuait TOUJOURS le champ à
+     * l'adversaire actif, y compris quand c'était mon Wimessir qui le posait.
+     * Poseur inconnu ou dans mon camp : aucun Champ'Duit ne sera déduit.
+     */
+    private static void capturerPoseurTerrain(Object argPoseur) {
         correctionChampDuitAppliquee = false;
+        poseurTerrainAdversaire = null;
         try {
+            if (argPoseur == null) return;
+            Boolean adverse = ObservationCollector.determinerAttaquant(
+                MoveUseTracker.extraireProprietaire(argPoseur));
+            if (!Boolean.TRUE.equals(adverse)) return;
             com.tropimon.randompvp.calc.Pokemon adv = BattleStateTracker.getAdversaireActif();
             if (adv != null) poseurTerrainAdversaire = adv.getEspece();
         } catch (Exception ignored) {
@@ -366,13 +392,21 @@ public final class FieldTracker {
                 correctionArgilePouvoirAppliquee = true;
             }
         }
-        if (toursTerrainRestants > 0) {
-            toursTerrainRestants--;
-            // Même logique que Lumargile ci-dessus, pour Champ'Duit sur le terrain.
-            if (toursTerrainRestants == 0 && terrainActif != Field.TypeTerrain.AUCUN && !correctionChampDuitAppliquee) {
-                toursTerrainRestants = 3;
-                ObservationCollector.confirmerObjetDirect(poseurTerrainAdversaire, "Champ'Duit");
+        if (terrainActif != Field.TypeTerrain.AUCUN) {
+            toursDepuisDebutTerrain++;
+            // Jamais 0 tant que le champ est actif : la fin réelle arrive par
+            // le message fieldend, pas par ce compte.
+            if (toursTerrainRestants > 1) toursTerrainRestants--;
+
+            // Champ'Duit : preuve seulement quand le champ survit à un 6e
+            // message de tour. Les logs montrent qu'un champ normal posé entre
+            // deux tours (talent à l'entrée) voit passer 5 messages de tour
+            // avant sa fin : l'ancien compte (5, -1 par message, conclusion à 0)
+            // concluait donc au Champ'Duit sur TOUS les champs normaux.
+            if (toursDepuisDebutTerrain >= 6 && dureeTerrainInitiale < 8 && !correctionChampDuitAppliquee) {
                 correctionChampDuitAppliquee = true;
+                toursTerrainRestants = Math.max(1, 8 - toursDepuisDebutTerrain);
+                ObservationCollector.confirmerObjetDirect(poseurTerrainAdversaire, "Champ'Duit");
             }
         }
     }
@@ -411,5 +445,37 @@ public final class FieldTracker {
         toursTerrainRestants = 0;
         poseurTerrainAdversaire = null;
         correctionChampDuitAppliquee = false;
+        toursDepuisDebutTerrain = 0;
+        dureeTerrainInitiale = 5;
+    }
+
+    /**
+     * Change-Côté (Court Change), capacité signature de Pyrobut (nom vérifié
+     * avant implémentation) : échange TOUS les effets de terrain entre les
+     * deux côtés - murs, pièges d'entrée. Confirmé sur Bulbapedia/Poképédia.
+     * Signalé par l'utilisateur : sans cette fonction, un joueur qui change
+     * de côté puis de Pokémon se voyait annoncer des dégâts de pièges qui
+     * avaient en réalité déjà basculé chez l'adversaire.
+     *
+     * Vent Arrière est échangé aussi (suivi par camp avec sa durée restante).
+     * Brume n'est jamais suivie, usage très rare en compétitif - limite assumée.
+     */
+    public static void echangerCotes() {
+        boolean tmpB;
+        tmpB = reflectJoueur; reflectJoueur = reflectAdversaire; reflectAdversaire = tmpB;
+        tmpB = lightScreenJoueur; lightScreenJoueur = lightScreenAdversaire; lightScreenAdversaire = tmpB;
+        tmpB = auroraVeilJoueur; auroraVeilJoueur = auroraVeilAdversaire; auroraVeilAdversaire = tmpB;
+        int tmpI;
+        tmpI = toursEcransJoueurRestants; toursEcransJoueurRestants = toursEcransAdversaireRestants; toursEcransAdversaireRestants = tmpI;
+        tmpB = stealthRockJoueur; stealthRockJoueur = stealthRockAdversaire; stealthRockAdversaire = tmpB;
+        tmpI = spikesJoueur; spikesJoueur = spikesAdversaire; spikesAdversaire = tmpI;
+        tmpI = toxicSpikesJoueur; toxicSpikesJoueur = toxicSpikesAdversaire; toxicSpikesAdversaire = tmpI;
+        tmpB = stickyWebJoueur; stickyWebJoueur = stickyWebAdversaire; stickyWebAdversaire = tmpB;
+        tmpB = tailwindJoueur; tailwindJoueur = tailwindAdversaire; tailwindAdversaire = tmpB;
+        tmpI = toursTailwindJoueurRestants; toursTailwindJoueurRestants = toursTailwindAdversaireRestants; toursTailwindAdversaireRestants = tmpI;
+        // Le "poseur présumé" ne correspond plus au bon écran après
+        // l'échange - mieux vaut arrêter d'en déduire Lumargile que de
+        // continuer avec une attribution devenue fausse.
+        poseurEcranAdversaire = null;
     }
 }

@@ -1,4 +1,5 @@
 {
   "key.randompvp.toggle": "Activer/désactiver RandomPvp",
-  "key.categories.randompvp": "RandomPvp"
+  "key.categories.randompvp": "RandomPvp",
+  "key.randompvp.annuler_objet": "Annuler l'objet confirmé de l'adversaire"
 }

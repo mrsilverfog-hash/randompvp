@@ -26,6 +26,16 @@ public final class ModToggle {
 
     private static boolean actif = false;
     private static KeyBinding touche;
+    private static KeyBinding toucheAnnuler;
+
+    /** Nom de la touche d'annulation tel que configuré par le joueur (F7 par défaut). */
+    public static String nomToucheAnnuler() {
+        try {
+            return toucheAnnuler.getBoundKeyLocalizedText().getString();
+        } catch (Exception e) {
+            return "F7";
+        }
+    }
 
     public static boolean estActif() {
         return actif;
@@ -39,7 +49,22 @@ public final class ModToggle {
             "key.categories.randompvp"
         ));
 
+        // Annule la confirmation d'objet de l'adversaire actif (faux positif) :
+        // elle ne pourra plus revenir pendant ce combat.
+        toucheAnnuler = KeyBindingHelper.registerKeyBinding(new KeyBinding(
+            "key.randompvp.annuler_objet",
+            InputUtil.Type.KEYSYM,
+            GLFW.GLFW_KEY_F7,
+            "key.categories.randompvp"
+        ));
+
         ClientTickEvents.END_CLIENT_TICK.register(client -> {
+            while (toucheAnnuler.wasPressed()) {
+                String msg = com.tropimon.randompvp.battle.ObservationCollector.annulerConfirmationAdversaire();
+                if (client.player != null) {
+                    client.player.sendMessage(Text.literal("§e[RandomPvp] " + msg), true);
+                }
+            }
             while (touche.wasPressed()) {
                 actif = !actif;
                 if (!actif) {
