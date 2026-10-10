@@ -2445,15 +2445,9 @@ public final class ObservationCollector {
         "trickroom", "magicroom", "wonderroom", "gravity"
     );
 
-    /**
-     * Capacités qui en déclenchent une autre. Seule l'appelante consomme des PP :
-     * un Ronflex qui sort Repos via Blabladodo dépense 1 PP de Blabladodo et zéro
-     * de Repos, alors que Cobblemon émet un message "used_move" pour les deux.
-     */
-    private static final java.util.Set<String> COUPS_APPELANTS = java.util.Set.of(
-        "sleeptalk", "metronome", "copycat", "naturepower", "assist",
-        "mirrormove", "mefirst"
-    );
+    // COUPS_APPELANTS (capacités qui en déclenchent une autre ; seule
+    // l'appelante consomme des PP) : défini plus haut, partagé avec le suivi
+    // du verrou Choix.
 
     /** Appelantes dont la capacité tirée appartient bien au moveset adverse. */
     private static final java.util.Set<String> APPELANTS_MOVESET_REEL = java.util.Set.of(
