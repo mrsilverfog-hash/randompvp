@@ -625,49 +625,42 @@ public class DamageCalculator {
      */
     public static double vitesseEnCombat(Pokemon p, Field.Meteo meteo, Field.TypeTerrain terrain,
                                          boolean ventArriere) {
-        int v = p.getStatCalculee(Stat.VITESSE);
-        int stage = Math.max(-6, Math.min(6, p.getStage(Stat.VITESSE)));
-        if (stage >= 0) v = (v * (2 + stage)) / 2;
-        else v = (v * 2) / (2 - stage);
+        // Formule du jeu (Showdown, vérifiée par les tests) : stat avec
+        // stages arrondie, puis Vent Arrière, talent et objet enchaînés en
+        // 4096e avec un seul arrondi, puis la paralysie (x0,5 vers le bas).
+        long v = appliquerStage(p.getStatCalculee(Stat.VITESSE), p.getStage(Stat.VITESSE));
+        java.util.List<Integer> mods = new java.util.ArrayList<>();
+        if (ventArriere) mods.add(8192);
 
-        int chaine = 4096;
-        if ("Mouchoir Choix".equals(p.getObjet())) chaine = chainer(chaine, 6144);
         String talent = p.getTalent();
         boolean soleil = meteo == Field.Meteo.SOLEIL || meteo == Field.Meteo.SOLEIL_INTENSE;
         boolean pluie = meteo == Field.Meteo.PLUIE || meteo == Field.Meteo.PLUIE_INTENSE;
-        if (("Chlorophylle".equals(talent) && soleil)
-            || ("Glissade".equals(talent) && pluie)
-            || ("Baigne Sable".equals(talent) && meteo == Field.Meteo.SABLE)
-            || ("Chasse-Neige".equals(talent) && meteo == Field.Meteo.NEIGE)) {
-            chaine = chainer(chaine, 8192);
-        }
-        if (Stat.VITESSE == statLaPlusHaute(p) && estBoostParadox(p, meteo, terrain)) {
-            chaine = chainer(chaine, 6144);
-        }
         boolean piedVeloce = "Pied Véloce".equals(talent) && p.getStatut() != Pokemon.Statut.AUCUN;
-        if (piedVeloce) chaine = chainer(chaine, 6144);
-        if (ventArriere) chaine = chainer(chaine, 8192);
-        v = pokeRound(v * (long) chaine / 4096.0);
-
-        if (!piedVeloce && p.getStatut() == Pokemon.Statut.PARALYSIE) {
-            v = v / 2;
+        if (("Chlorophylle".equals(talent) && soleil)
+                || ("Glissade".equals(talent) && pluie)
+                || ("Baigne Sable".equals(talent) && meteo == Field.Meteo.SABLE)
+                || ("Chasse-Neige".equals(talent) && meteo == Field.Meteo.NEIGE)) {
+            mods.add(8192);
+        } else if (piedVeloce) {
+            // Pied Véloce : +50 % sous un statut, et ignore le malus de paralysie
+            mods.add(6144);
+        } else if (Stat.VITESSE == statLaPlusHaute(p) && estBoostParadox(p, meteo, terrain)) {
+            mods.add(6144);
         }
-        return v;
+        if ("Mouchoir Choix".equals(p.getObjet())) mods.add(6144);
+
+        long m = 4096;
+        for (int mod : mods) m = (m * mod + 2048) >> 12;
+        m = Math.max(410, Math.min(131172, m));
+        v = ModifierContext.arrondiJeu(v * (double) m / 4096.0);
+
+        if (p.getStatut() == Pokemon.Statut.PARALYSIE && !piedVeloce) v = v * 50 / 100;
+        return Math.max(0, v);
     }
 
     /** Vitesse en combat sans Vent Arrière. */
     public static double vitesseEnCombat(Pokemon p, Field.Meteo meteo, Field.TypeTerrain terrain) {
         return vitesseEnCombat(p, meteo, terrain, false);
-    }
-
-    /** Chaînage de modificateurs Showdown (base 4096). */
-    private static int chainer(int chaine, int mod) {
-        return (int) ((chaine * (long) mod + 2048) >> 12);
-    }
-
-    /** Arrondi Showdown : partie décimale > 0,5 => supérieur, sinon inférieur. */
-    private static int pokeRound(double x) {
-        return (x % 1 > 0.5) ? (int) Math.ceil(x) : (int) Math.floor(x);
     }
 
     // Compatibilité : ancien appel sans terrain (Moteur Quark alors ignoré)
