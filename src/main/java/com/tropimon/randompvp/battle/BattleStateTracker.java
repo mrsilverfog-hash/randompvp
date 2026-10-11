@@ -36,10 +36,29 @@ public final class BattleStateTracker {
         return convertirPokemonComplet(complet);
     }
 
+    /**
+     * Mon Pokémon actif tel que le combat le voit (PV, statut, boosts du
+     * combat). Les IV, EV et nature, absents des données de combat, viennent
+     * de l'équipe : sans eux les PV max étaient trop bas (Roigada 300 au lieu
+     * de 394) et chaque % de PV perdu était faux, d'où de faux « moins que
+     * prévu » et des plafonds d'Attaque adverses appliqués à tort.
+     */
     public static Pokemon getJoueurActif() {
         ClientBattleActor acteur = getActeurJoueur();
-        if (acteur == null) return null;
-        return premierActif(acteur);
+        if (acteur == null || acteur.getActivePokemon().isEmpty()) return null;
+        ClientBattlePokemon cbp = acteur.getActivePokemon().get(0).getBattlePokemon();
+        if (cbp == null) return null;
+        com.cobblemon.mod.common.pokemon.Pokemon complet = null;
+        try {
+            for (com.cobblemon.mod.common.pokemon.Pokemon p : acteur.getPokemon()) {
+                if (p.getUuid().equals(cbp.getUuid())) {
+                    complet = p;
+                    break;
+                }
+            }
+        } catch (Exception ignored) {
+        }
+        return convertir(cbp, complet);
     }
 
     public static Pokemon getAdversaireActif() {
@@ -208,6 +227,11 @@ public final class BattleStateTracker {
     }
 
     private static Pokemon convertir(ClientBattlePokemon cbp) {
+        return convertir(cbp, null);
+    }
+
+    /** complet : le Pokémon d'équipe correspondant (mes Pokémon), sinon null. */
+    private static Pokemon convertir(ClientBattlePokemon cbp, com.cobblemon.mod.common.pokemon.Pokemon complet) {
         Species espece = cbp.getSpecies();
         PokemonProperties props = cbp.getProperties();
 
@@ -243,6 +267,21 @@ public final class BattleStateTracker {
         // adverse ces champs sont partiels ou absents, et côté joueur ils
         // refléteraient le Pokémon stocké, pas celui généré pour le combat.
         RandomBattleFormat.appliquer(builder);
+
+        // Mes Pokémon : IV, EV et nature de l'équipe (même espèce seulement ;
+        // un Métamorph transformé garde la conversion du combat)
+        if (complet != null && complet.getSpecies().getName().equalsIgnoreCase(espece.getName())) {
+            try {
+                for (var e : java.util.Map.of(Stat.PV, Stats.HP, Stat.ATTAQUE, Stats.ATTACK,
+                        Stat.DEFENSE, Stats.DEFENCE, Stat.ATTAQUE_SPE, Stats.SPECIAL_ATTACK,
+                        Stat.DEFENSE_SPE, Stats.SPECIAL_DEFENCE, Stat.VITESSE, Stats.SPEED).entrySet()) {
+                    builder.iv(e.getKey(), complet.getIvs().getOrDefault(e.getValue()));
+                    builder.ev(e.getKey(), complet.getEvs().getOrDefault(e.getValue()));
+                }
+                builder.nature(ShowdownIdMapper.nature(complet.getEffectiveNature().getName().getPath()));
+            } catch (Exception ignored) {
+            }
+        }
 
         Pokemon pokemon = builder.build();
 
