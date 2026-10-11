@@ -62,7 +62,17 @@ public final class SwitchOverlayRenderer {
         // encore mis à jour après un vol via Pickpocket.
         ObservationCollector.appliquerObjetReelJoueur(candidat);
 
-        Pokemon adversaire = ObservationCollector.construireAdversaireEstime(adversaireBase);
+        Pokemon adversaire = ObservationCollector.adversaireAffiche(adversaireBase);
+
+        // Métamorph avec Imposteur : il entre déjà transformé en l'adversaire
+        // en face (stats, types, talent et boosts copiés ; ses PV, son objet).
+        boolean imposteur = "Imposteur".equals(candidat.getTalent());
+        if (imposteur) {
+            candidat = ObservationCollector.construireMorphing(candidat, adversaireBase);
+            for (Stat s : Stat.values()) {
+                if (s != Stat.PV) candidat.setStage(s, BoostTracker.getStageAdversaire(s));
+            }
+        }
 
         // Seuls les boosts adverses restent actifs après un switch
         for (Stat s : Stat.values()) {
@@ -117,21 +127,32 @@ public final class SwitchOverlayRenderer {
             couleurs.add(pvApres <= 0 ? COULEUR_KO : (degatsPieges >= 25 ? 0xFFAA00 : COULEUR_TEXTE));
         }
 
-        // Ses attaques
-        lignes.add("Ses attaques :");
+        // Ses attaques (Imposteur : celles de l'adversaire, connues ou Smogon, "?")
+        lignes.add(imposteur ? "Ses attaques (copiées, probables) :" : "Ses attaques :");
         couleurs.add(COULEUR_TITRE);
-        for (Move coup : membre.getMoveSet()) {
-            if (coup == null) continue;
-            com.tropimon.randompvp.calc.Move capacite = convertirCapacite(coup);
+        List<Object[]> attaques = new ArrayList<>();
+        if (imposteur) {
+            for (String id : CalcOverlay.capacitesProbables(adversaireBase.getEspece())) {
+                MoveTemplate t = Moves.INSTANCE.getByName(id);
+                if (t != null) attaques.add(new Object[]{t.getDisplayName().getString() + " ?", convertirTemplate(t)});
+            }
+        } else {
+            for (Move coup : membre.getMoveSet()) {
+                if (coup != null) attaques.add(new Object[]{coup.getDisplayName().getString(), convertirCapacite(coup)});
+            }
+        }
+        for (Object[] attaque : attaques) {
+            com.tropimon.randompvp.calc.Move capacite = (com.tropimon.randompvp.calc.Move) attaque[1];
             if (capacite == null || capacite.estCapaciteDeStatut()) continue;
 
             DamageCalculator.Resultat r = DamageCalculator.calculer(candidat, adversaire, capacite, field, field.getEcransAdversaire(), false);
-            String nom = coup.getDisplayName().getString();
+            String nom = (String) attaque[0];
             if (r.immunise) {
                 lignes.add(nom + " : immunisé");
                 couleurs.add(COULEUR_TEXTE);
             } else {
-                lignes.add(String.format("%s : %.0f%% - %.0f%%", nom, r.pourcentageMin, r.pourcentageMax));
+                lignes.add(String.format("%s : %.0f%% - %.0f%%%s", nom, r.pourcentageMin, r.pourcentageMax,
+                    CalcOverlay.texteKO(r, candidat, adversaire, capacite, field, true)));
                 couleurs.add(r.koGaranti ? COULEUR_KO : (r.koPossible ? 0xFFAA00 : COULEUR_TEXTE));
             }
         }
@@ -140,6 +161,15 @@ public final class SwitchOverlayRenderer {
         String especeAdv = adversaireBase.getEspece();
         SmogonDataLoader.SmogonPokemonData smogon = SmogonDataLoader.getDonnees(especeAdv);
         List<MoveTemplate> coupsReveles = ObservationCollector.getCoupsAdversaireReveles(especeAdv);
+        List<String> copiees = ObservationCollector.getCapacitesMorphingAdversaire();
+        if (!copiees.isEmpty()) {
+            coupsReveles = new ArrayList<>();
+            for (String id : copiees) {
+                MoveTemplate t = Moves.INSTANCE.getByName(id);
+                if (t != null) coupsReveles.add(t);
+            }
+            smogon = null;
+        }
 
         LinkedHashSet<String> reveleIds = new LinkedHashSet<>();
         for (MoveTemplate t : coupsReveles) reveleIds.add(t.getName());
@@ -172,7 +202,8 @@ public final class SwitchOverlayRenderer {
                         lignes.add(prefixe + nom + " : immunisé");
                         couleurs.add(estRevele ? COULEUR_REVELE : COULEUR_TEXTE);
                     } else {
-                        lignes.add(String.format("%s%s : %.0f%% - %.0f%%", prefixe, nom, r.pourcentageMin, r.pourcentageMax));
+                        lignes.add(String.format("%s%s : %.0f%% - %.0f%%%s", prefixe, nom, r.pourcentageMin, r.pourcentageMax,
+                            CalcOverlay.texteKO(r, adversaire, candidat, capaciteAdv, field, false)));
                         couleurs.add(r.koGaranti ? COULEUR_KO
                             : (estRevele ? COULEUR_REVELE : (r.koPossible ? 0xFFAA00 : COULEUR_TEXTE)));
                     }

@@ -176,8 +176,33 @@ const CAS = [
     ['Gant de Boxe + Poing de Fer', ['Iron Hands', { ...ATK, ability: 'Iron Fist', item: 'Punching Glove' }], ['Corviknight', PHYS_DEF], 'Thunder Punch'],
     ['Analyste contre plus rapide', ['Magnezone', { ...SPA, ability: 'Analytic' }], ['Dragapult', SPEC_DEF], 'Flash Cannon'],
     ['Analyste contre plus lent', ['Magnezone', { ...SPA, ability: 'Analytic' }], ['Toxapex', { ...SPEC_DEF, ability: 'Regenerator' }], 'Flash Cannon'],
+    // --- Chances de K.O. (fin de tour) ---
+    ['KO Restes', ['Garchomp', ATK], ['Corviknight', { ...PHYS_DEF, item: 'Leftovers' }], 'Stone Edge'],
+    ['KO Restes 2HKO', ['Dragonite', ATK], ['Toxapex', { ...PHYS_DEF, item: 'Leftovers', ability: 'Regenerator' }], 'Earthquake'],
+    ['KO brûlé', ['Gholdengo', SPA], ['Garchomp', { ...SPEC_DEF, status: 'brn' }], 'Shadow Ball'],
+    ['KO empoisonné', ['Gholdengo', SPA], ['Great Tusk', { ...SPEC_DEF, status: 'psn' }], 'Shadow Ball'],
+    ['KO Boue Noire hors Poison', ['Gholdengo', SPA], ['Great Tusk', { ...SPEC_DEF, item: 'Black Sludge' }], 'Shadow Ball'],
+    ['KO sable', ['Primarina', SPA], ['Dragonite', { ...SPEC_DEF, ability: 'Inner Focus' }], 'Moonblast', { field: { weather: 'Sand' } }],
+    ['KO Champ Herbu', ['Gholdengo', SPA], ['Great Tusk', SPEC_DEF], 'Shadow Ball', { field: { terrain: 'Grassy' } }],
+    ['KO PV partiels', ['Garchomp', ATK], ['Great Tusk', { ...PHYS_DEF, curHP: 45 }], 'Earthquake'],
+    ['KO Sabotage sur Restes', ['Kingambit', ATK], ['Gholdengo', { ...PHYS_DEF, item: 'Leftovers' }], 'Knock Off'],
     ['Protection + Orbe Vie', ['Garchomp', { ...ATK, item: 'Life Orb' }], ['Great Tusk', PHYS_DEF], 'Earthquake', { field: { defenderSide: { isReflect: true } } }],
     ['Ombre Nocturne', ['Dusclops', PHYS_DEF], ['Great Tusk', PHYS_DEF], 'Night Shade'],
+
+    // --- Multi-coups : dégâts de CHAQUE coup (options.hits = nombre de coups) ---
+    ['Stalactite 5 coups Multi-Coups', ['Cloyster', { ...ATK, ability: 'Skill Link' }], ['Corviknight', PHYS_DEF], 'Icicle Spear', { hits: 5 }],
+    ['Balle Graine 3 coups Technicien', ['Breloom', { ...ATK, ability: 'Technician' }], ['Great Tusk', PHYS_DEF], 'Bullet Seed', { hits: 3 }],
+    ['Boule Roc 4 coups Dé Pipé', ['Garchomp', { ...ATK, item: 'Loaded Dice' }], ['Corviknight', PHYS_DEF], 'Rock Blast', { hits: 4 }],
+    ['Triple Axel Technicien', ['Weavile', { ...ATK, ability: 'Technician' }], ['Garchomp', PHYS_DEF], 'Triple Axel', { hits: 3 }],
+    ['Triple Pied', ['Hitmontop', { ...ATK, ability: 'Technician' }], ['Corviknight', PHYS_DEF], 'Triple Kick', { hits: 3 }],
+    ['Multiécaille au premier coup', ['Cloyster', { ...ATK, ability: 'Skill Link' }], ['Dragonite', { ...PHYS_DEF, ability: 'Multiscale' }], 'Icicle Spear', { hits: 5 }],
+    ['Endurance entre les coups', ['Cinccino', { ...ATK, ability: 'Skill Link' }], ['Mudsdale', { ...PHYS_DEF, ability: 'Stamina' }], 'Tail Slap', { hits: 5 }],
+    ['Armurouillée entre les coups', ['Cloyster', { ...ATK, ability: 'Skill Link' }], ['Skarmory', { ...PHYS_DEF, ability: 'Weak Armor' }], 'Rock Blast', { hits: 5 }],
+    ['Endurance contre Lucidité', ['Cinccino', { ...ATK, ability: 'Unaware' }], ['Mudsdale', { ...PHYS_DEF, ability: 'Stamina' }], 'Tail Slap', { hits: 3 }],
+    ['Torrent de Coups critique', ['Urshifu-Rapid-Strike', ATK], ['Palossand', { ...PHYS_DEF, ability: 'Water Compaction' }], 'Surging Strikes', { hits: 3 }],
+    ['Draco-Flèches', ['Dragapult', ATK], ['Corviknight', PHYS_DEF], 'Dragon Darts', { hits: 2 }],
+    ['Prolifération', ['Maushold', { ...ATK, ability: 'Technician' }], ['Corviknight', PHYS_DEF], 'Population Bomb', { hits: 10 }],
+    ['Shuriken Spécial', ['Greninja', SPA], ['Gholdengo', SPEC_DEF], 'Water Shuriken', { hits: 3 }],
 ];
 
 const META = {
@@ -225,10 +250,11 @@ for (const [nom, [espA, setA], [espD, setD], nomCapacite, options = {}] of CAS) 
     const niveau = options.niveau || 100;
     const attaquant = construire(espA, setA, niveau);
     const defenseur = construire(espD, setD, niveau);
-    const capacite = new Move(gen, nomCapacite, { isCrit: !!options.crit });
+    const capacite = new Move(gen, nomCapacite, { isCrit: !!options.crit, hits: options.hits });
     const champ = new Field(options.field || {});
     const r = calculate(gen, attaquant, defenseur, capacite, champ);
     const degats = typeof r.damage === 'number' ? [r.damage] : r.damage;
+    const multi = Array.isArray(degats[0]);
     const ecrans = (options.field && options.field.defenderSide) || {};
     const donnees = gen.moves.get(toId(nomCapacite));
     sortie.push({
@@ -246,7 +272,18 @@ for (const [nom, [espA, setA], [espD, setD], nomCapacite, options = {}] of CAS) 
         protection: !!ecrans.isReflect,
         murLumiere: !!ecrans.isLightScreen,
         critique: !!options.crit,
-        degatsAttendus: degats.length === 1 ? Array(16).fill(degats[0]) : degats,
+        degatsAttendus: multi ? null : degats.length === 1 ? Array(16).fill(degats[0]) : degats,
+        // Multi-coups : dégâts de chaque coup ([coup][jet])
+        matriceAttendue: multi ? degats : null,
+        // Chances de K.O. de Showdown (chance -1 = "possible" sans chiffre)
+        // Multi-coups : Showdown suppose un nombre de coups fixe, TropiCalc
+        // pondère 2 à 5 coups, les chances de K.O. ne sont pas comparables.
+        ko: multi ? null : (() => {
+            try {
+                const k = r.kochance();
+                return { n: k.n, chance: k.chance === undefined ? -1 : k.chance, texte: k.text };
+            } catch (e) { return null; }
+        })(),
         description: (() => { try { return r.desc(); } catch (e) { return ''; } })(),
     });
 }

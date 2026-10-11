@@ -106,17 +106,38 @@ public final class CalcOverlay implements HudRenderCallback {
         // cible copiée déclenche à tort une purge des boosts comme un vrai switch.
         String especeJoueurStable = joueur.getEspece();
 
-        Pokemon adversaire = ObservationCollector.construireAdversaireEstime(adversaireBase);
+        // (copie exacte de mon Pokémon si c'est un Métamorph adverse transformé)
+        Pokemon adversaire = ObservationCollector.adversaireAffiche(adversaireBase);
 
-        // Imposteur : les stats du joueur sont celles de la cible copiée,
-        // mais les PV restent ceux de Métamorph
-        if (BattleStateTracker.joueurEstTransforme()) {
-            Pokemon statsDitto = joueur;
-            Pokemon copie = ObservationCollector.construireAdversaireEstime(adversaireBase);
-            copie.setPvMaxOverride(statsDitto.getPvMax());
-            copie.setPvActuels(statsDitto.getPvActuels());
-            copie.setStatut(statsDitto.getStatut());
-            joueur = copie;
+        // Morphing / Imposteur : stats, types et talent de la CIBLE copiée
+        // (gardée même si l'adversaire a changé de Pokémon depuis), PV,
+        // objet et statut de Métamorph.
+        boolean transforme = BattleStateTracker.joueurEstTransforme();
+        Pokemon cibleMorphing = null;
+        if (transforme) {
+            cibleMorphing = ObservationCollector.getCibleMorphingJoueur();
+            if (cibleMorphing == null) cibleMorphing = adversaireBase;
+            joueur = ObservationCollector.construireMorphing(joueur, cibleMorphing);
+        }
+
+        // Mes capacités : celles de ma fiche, ou celles copiées par Morphing
+        // (menu d'attaque du jeu ; à défaut, capacités connues de la cible et
+        // Smogon, marquées "?")
+        List<CapaciteAffichee> mesCapacites = new ArrayList<>();
+        if (transforme) {
+            List<String> ids = ObservationCollector.getCapacitesMorphing();
+            boolean incertain = ids.isEmpty();
+            if (incertain) ids = capacitesProbables(cibleMorphing.getEspece());
+            for (String id : ids) {
+                MoveTemplate t = Moves.INSTANCE.getByName(id);
+                if (t == null) continue;
+                mesCapacites.add(new CapaciteAffichee(t.getDisplayName().getString() + (incertain ? " ?" : ""),
+                    convertirTemplate(t)));
+            }
+        } else {
+            for (Move coup : monComplet.getMoveSet()) {
+                if (coup != null) mesCapacites.add(new CapaciteAffichee(coup.getDisplayName().getString(), convertirCapacite(coup)));
+            }
         }
 
         // Purge les stages si le Pokémon actif d'un camp a changé (switch)
@@ -142,10 +163,7 @@ public final class CalcOverlay implements HudRenderCallback {
         // Le panneau a beaucoup grandi (Résiduel, Verrou Choix, durées, jusqu'à
         // 6 capacités adverses...) : estimation haute du nombre de lignes pour
         // garantir qu'il reste visible même sur petite résolution / GUI Scale élevée.
-        int nbCapacitesJoueur = 0;
-        for (Move coup : monComplet.getMoveSet()) {
-            if (coup != null) nbCapacitesJoueur++;
-        }
+        int nbCapacitesJoueur = mesCapacites.size();
         int lignesEstimees = 2 + nbCapacitesJoueur + 1 + 6 + 1 + 2 + 1 + 2 + 3;
         int hauteurEstimee = lignesEstimees * hauteurLigne + 12;
         int scaledHeight = client.getWindow().getScaledHeight();
@@ -160,8 +178,8 @@ public final class CalcOverlay implements HudRenderCallback {
         Field field = FieldTracker.construireField();
 
         // --- Section 1 : mes capacités ---
-        String titre = BattleStateTracker.joueurEstTransforme()
-            ? "RandomPvp [transformé]" : "RandomPvp";
+        String titre = transforme
+            ? "RandomPvp [transformé en " + nomEspece(cibleMorphing.getEspece()) + "]" : "RandomPvp";
         dessinerTexte(titre, x, y, COULEUR_TITRE);
         y += hauteurLigne + 2;
 
@@ -242,9 +260,8 @@ public final class CalcOverlay implements HudRenderCallback {
             || ObservationCollector.aChipTalentConfirme(adversaireBase.getEspece());
         boolean casqueBrut = "Casque Brut".equals(adversaire.getObjet());
 
-        for (Move coup : monComplet.getMoveSet()) {
-            if (coup == null) continue;
-            com.tropimon.randompvp.calc.Move capacite = convertirCapacite(coup);
+        for (CapaciteAffichee ca : mesCapacites) {
+            com.tropimon.randompvp.calc.Move capacite = ca.capacite();
             if (capacite == null || capacite.estCapaciteDeStatut()) continue;
 
             // Fulgurayon : +1 Attaque Spéciale GARANTI dès son lancement -
@@ -270,7 +287,7 @@ public final class CalcOverlay implements HudRenderCallback {
                 if (estFulgurayon) joueur.modifierStage(Stat.ATTAQUE_SPE, -1);
                 if (ballonEstimeNonConfirme) adversaire.setObjet("Ballon");
             }
-            String nom = coup.getDisplayName().getString();
+            String nom = ca.nom();
             String ligne;
             int couleur = COULEUR_TEXTE;
             if (r.immunise) {
@@ -283,7 +300,8 @@ public final class CalcOverlay implements HudRenderCallback {
                 String marqueur = adversaire.estCorrigee(statDef) ? "~" : "";
                 String suffixeBoost = estFulgurayon ? " (+1)" : "";
                 String suffixeBallon = ballonEstimeNonConfirme ? " (0% si Ballon)" : "";
-                ligne = String.format("%s : %s%.0f%% - %.0f%%%s%s", nom, marqueur, r.pourcentageMin, r.pourcentageMax, suffixeBoost, suffixeBallon);
+                ligne = String.format("%s : %s%.0f%% - %.0f%%%s%s%s", nom, marqueur, r.pourcentageMin, r.pourcentageMax,
+                    suffixeBoost, suffixeBallon, texteKO(r, joueur, adversaire, capacite, field, true));
 
 
                 // Laser Hasard : 30% de chances de doubler sa puissance (80 -> 160).
@@ -328,6 +346,17 @@ public final class CalcOverlay implements HudRenderCallback {
 
         SmogonDataLoader.SmogonPokemonData smogon = SmogonDataLoader.getDonnees(especeAdv);
         List<MoveTemplate> coupsReveles = ObservationCollector.getCoupsAdversaireReveles(especeAdv);
+        // Métamorph adverse transformé en mon Pokémon : il a MES capacités,
+        // connues avec certitude.
+        List<String> copiees = ObservationCollector.getCapacitesMorphingAdversaire();
+        if (!copiees.isEmpty()) {
+            coupsReveles = new ArrayList<>();
+            for (String id : copiees) {
+                MoveTemplate t = Moves.INSTANCE.getByName(id);
+                if (t != null) coupsReveles.add(t);
+            }
+            smogon = null;
+        }
 
         LinkedHashSet<String> reveleIds = new LinkedHashSet<>();
         for (MoveTemplate t : coupsReveles) reveleIds.add(t.getName());
@@ -344,7 +373,9 @@ public final class CalcOverlay implements HudRenderCallback {
 
         if (!aAfficher.isEmpty()) {
             y += 4;
-            dessinerTexte("Capacités adverses :", x, y, COULEUR_DANGER);
+            String cibleAdv = ObservationCollector.getCibleMorphingAdversaire();
+            dessinerTexte(cibleAdv != null ? "Capacités adverses (copie de ton " + nomEspece(cibleAdv) + ") :"
+                : "Capacités adverses :", x, y, COULEUR_DANGER);
             y += hauteurLigne;
 
             // Verrou Choix : objet Choix + un coup déjà utilisé depuis son entrée
@@ -405,8 +436,9 @@ public final class CalcOverlay implements HudRenderCallback {
                             ? Stat.ATTAQUE : Stat.ATTAQUE_SPE;
                         String marq = adversaire.estCorrigee(statAtk) ? "~" : "";
                         String suffixeBoost = estFulgurayon ? " (+1)" : "";
-                        ligne = String.format("%s%s : %s%.0f%% - %.0f%%%s%s",
-                            estRevele ? "✓ " : "", nom, marq, r.pourcentageMin, r.pourcentageMax, suffixeBoost, suffixePp);
+                        ligne = String.format("%s%s : %s%.0f%% - %.0f%%%s%s%s",
+                            estRevele ? "✓ " : "", nom, marq, r.pourcentageMin, r.pourcentageMax, suffixeBoost,
+                            texteKO(r, adversaire, joueur, capaciteAdv, field, false), suffixePp);
                         if (r.koGaranti) couleur = COULEUR_KO;
                         else if (r.koPossible && !estRevele) couleur = 0xFFAA00;
 
@@ -669,11 +701,14 @@ public final class CalcOverlay implements HudRenderCallback {
             dessinerTexte("Objet confirmé : aucun (retiré)", x, y, COULEUR_REVELE);
             y += hauteurLigne;
         }
-        // Objet probable : désigné par Smogon (Évoluroc), sans preuve.
-        // Utilisé dans les calculs, affiché en gris avec un "?".
+        // Objet supposé : Évoluroc d'une sous-évolution, ou objet désigné par
+        // les dégâts, sans preuve. Utilisé dans les calculs.
         String objetProbable = ObservationCollector.getObjetProbable(especeAdv);
         if (objetProbable != null && objetConfirme == null && !objetRetire) {
-            dessinerTexte("Objet probable : " + objetProbable + " ?", x, y, COULEUR_GRIS);
+            String raisonProbable = ObservationCollector.getRaisonObjetProbable(especeAdv);
+            dessinerTexte("Objet supposé : " + objetProbable
+                + (raisonProbable != null ? " (" + raisonProbable + ")" : "")
+                + ", pris en compte dans les dégâts", x, y, COULEUR_GRIS);
             y += hauteurLigne;
         }
         // Preuve qu'il n'a pas d'objet Choix : deux capacités différentes
@@ -815,6 +850,54 @@ public final class CalcOverlay implements HudRenderCallback {
 
         if (hypo.immunise) return null;
         return String.format(" (%.0f%% - %.0f%%)", hypo.pourcentageMin, hypo.pourcentageMax);
+    }
+
+    /**
+     * " | 2HKO 78 %" : chances de K.O. de ce calcul (modèle Showdown : jets,
+     * PV actuels, Restes, brûlure, poison, Toxik, sable...), "" si aucune.
+     */
+    static String texteKO(DamageCalculator.Resultat r, Pokemon attaquant, Pokemon defenseur,
+                          com.tropimon.randompvp.calc.Move capacite, Field terrain, boolean defenseurAdverse) {
+        if (r == null || r.immunise || r.degatsParRoll.length == 0) return "";
+        // Tête de Gel / Fantômasque intacts : le coup n'inflige pas ses jets
+        if (r.degatsMax != r.degatsParRoll[r.degatsParRoll.length - 1]) return "";
+        // Fermeté / Ceinture Focus à pleins PV : pas d'OHKO, le HUD le dit déjà
+        boolean protege = r.degatsParRoll[0] >= defenseur.getPvActuels() && !r.koGaranti;
+        int toxik = defenseurAdverse ? ObservationCollector.getCompteurToxikProchainAdversaire()
+            : ObservationCollector.getCompteurToxikProchainJoueur();
+        com.tropimon.randompvp.calc.ChancesKO.Resultat ko = com.tropimon.randompvp.calc.ChancesKO.calculer(
+            r.degatsParRoll, attaquant, defenseur, capacite, terrain, toxik);
+        if (protege && ko.n() == 1) return "";
+        String t = ko.texte();
+        return t.isEmpty() ? "" : " | " + t;
+    }
+
+    /** Une de mes capacités à afficher : nom affiché et capacité de calcul. */
+    private record CapaciteAffichee(String nom, com.tropimon.randompvp.calc.Move capacite) {
+    }
+
+    /**
+     * Capacités probables d'une espèce (connues en combat, puis Smogon) :
+     * repli pour un Métamorph transformé tant que le menu d'attaque n'a pas
+     * été lu. Au plus 6.
+     */
+    static List<String> capacitesProbables(String espece) {
+        LinkedHashSet<String> ids = new LinkedHashSet<>();
+        for (MoveTemplate t : ObservationCollector.getCoupsAdversaireReveles(espece)) ids.add(t.getName());
+        SmogonDataLoader.SmogonPokemonData smogon = SmogonDataLoader.getDonnees(espece);
+        if (smogon != null) ids.addAll(smogon.topMovesShowdownId());
+        List<String> r = new ArrayList<>(ids);
+        return r.size() > 6 ? r.subList(0, 6) : r;
+    }
+
+    /** Nom affiché d'une espèce ("hydrapple" -> "Pomdorochi"), l'id à défaut. */
+    static String nomEspece(String espece) {
+        try {
+            String nom = Text.translatable("cobblemon.species." + espece + ".name").getString();
+            if (nom != null && !nom.startsWith("cobblemon.")) return nom;
+        } catch (Exception ignored) {
+        }
+        return espece;
     }
 
     private static int vitesseEffective(Pokemon p, boolean estJoueur) {

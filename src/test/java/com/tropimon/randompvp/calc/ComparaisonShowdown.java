@@ -67,11 +67,15 @@ public final class ComparaisonShowdown {
         ecrans.setMurLumiere(o.get("murLumiere").getAsBoolean());
         boolean critique = o.get("critique").getAsBoolean();
 
+        if (o.has("matriceAttendue") && !o.get("matriceAttendue").isJsonNull()) {
+            return verifierMatrice(o, attaquant, defenseur, capacite, terrain, ecrans, critique);
+        }
+
         DamageCalculator.Resultat r = DamageCalculator.calculer(attaquant, defenseur, capacite, terrain, ecrans, critique);
 
         int[] attendus = entiers(o.getAsJsonArray("degatsAttendus"));
         int[] obtenus = r.immunise || r.degatsParRoll.length == 0 ? new int[16] : r.degatsParRoll;
-        if (Arrays.equals(attendus, obtenus)) return null;
+        if (Arrays.equals(attendus, obtenus)) return verifierKO(o, obtenus, attaquant, defenseur, capacite, terrain);
 
         StringBuilder sb = new StringBuilder();
         sb.append("\n  Showdown  : ").append(Arrays.toString(attendus));
@@ -80,6 +84,41 @@ public final class ComparaisonShowdown {
         ecartsDeStats(sb, "attaquant", attaquant, o.getAsJsonObject("attaquant"));
         ecartsDeStats(sb, "défenseur", defenseur, o.getAsJsonObject("defenseur"));
         return sb.toString();
+    }
+
+    /** Multi-coups : les 16 jets de chaque coup contre la matrice de Showdown, null si identiques. */
+    private static String verifierMatrice(JsonObject o, Pokemon attaquant, Pokemon defenseur, Move capacite,
+                                          Field terrain, Field.Ecrans ecrans, boolean critique) {
+        JsonArray lignes = o.getAsJsonArray("matriceAttendue");
+        int[][] obtenue = DamageCalculator.matriceCoups(attaquant, defenseur, capacite, terrain, ecrans,
+            critique, lignes.size());
+        StringBuilder sb = new StringBuilder();
+        for (int i = 0; i < lignes.size(); i++) {
+            int[] attendus = entiers(lignes.get(i).getAsJsonArray());
+            int[] obtenus = obtenue == null ? new int[16] : obtenue[i];
+            if (!Arrays.equals(attendus, obtenus)) {
+                sb.append("\n  Coup ").append(i + 1).append(" Showdown  : ").append(Arrays.toString(attendus));
+                sb.append("\n  Coup ").append(i + 1).append(" TropiCalc : ").append(Arrays.toString(obtenus));
+            }
+        }
+        if (sb.length() == 0) return null;
+        sb.append("\n  ").append(o.get("description").getAsString());
+        return sb.toString();
+    }
+
+    /** Chances de K.O. contre celles de Showdown (n et probabilité), null si identiques. */
+    private static String verifierKO(JsonObject o, int[] degats, Pokemon attaquant, Pokemon defenseur,
+                                     Move capacite, Field terrain) {
+        if (!o.has("ko") || o.get("ko").isJsonNull()) return null;
+        JsonObject ko = o.getAsJsonObject("ko");
+        int nAttendu = ko.get("n").getAsInt();
+        double chanceAttendue = ko.get("chance").getAsDouble();
+        ChancesKO.Resultat k = ChancesKO.calculer(degats, attaquant, defenseur, capacite, terrain, 0);
+        boolean memeN = k.n() == nAttendu;
+        boolean memeChance = chanceAttendue < 0 ? k.possible() : (!k.possible() && Math.abs(k.chance() - chanceAttendue) < 1e-9);
+        if (memeN && memeChance) return null;
+        return "\n  Chances de K.O. : Showdown " + ko.get("texte").getAsString() + " (n=" + nAttendu + ", "
+            + chanceAttendue + "), TropiCalc " + k.texte() + " (n=" + k.n() + ", " + k.chance() + ")";
     }
 
     // --- Construction des objets du calcul ---

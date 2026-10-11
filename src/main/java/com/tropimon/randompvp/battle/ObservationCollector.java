@@ -223,12 +223,33 @@ public final class ObservationCollector {
     private static Boolean adversaireAAgiEnPremier = null;
     private static String espaceAdversaireDuTour = null;
 
+    // --- Fin de tour différée ---
+    // Le serveur envoie la mise à jour des PV environ 1,5 s APRÈS le message
+    // de la capacité, et le message "tour suivant" arrive juste après la
+    // dernière capacité : mesurés à ce moment, les dégâts du dernier coup du
+    // tour valaient 0 (3 Ébullilave sur Carchacrok "perte 0,0 %", Draco-Griffe
+    // 1,8 % pour 20 % prévus). Les mesures de fin de tour attendent donc que
+    // les PV soient à jour : 2,5 s, ou le prochain message de combat.
+    private static long finDeTourEnAttenteMs = 0;
+    private static final long DELAI_PV_MS = 2500;
+
     public static synchronized void signalerNouveauTour() {
         // Une appelante peut échouer (Blabladodo sur un Pokémon réveillé) : sans
         // ce reset, le drapeau survivrait au tour et ferait sauter à tort le
         // décompte de PP de la capacité suivante.
         appelantAdversaireEnAttente = null;
 
+        if (finDeTourEnAttenteMs != 0) traiterFinDeTour();
+        finDeTourEnAttenteMs = System.currentTimeMillis();
+    }
+
+    /** Traite la fin de tour en attente (à appeler avant tout nouveau message). */
+    public static synchronized void viderFinDeTourEnAttente() {
+        if (finDeTourEnAttenteMs != 0) traiterFinDeTour();
+    }
+
+    private static synchronized void traiterFinDeTour() {
+        finDeTourEnAttenteMs = 0;
         mettreAJourRepos();
         try {
             journaliserEstimation();
@@ -369,15 +390,7 @@ public final class ObservationCollector {
             if (perteAdversaire < -5.0 || perteJoueur < -5.0) {
                 // Soin adverse de ~1/16 sans switch ni capacité de soin : Restes confirmés
                 // (Vampigraine/Vœu soignent 1/8+ et le tour d'après pour Vœu : exclus)
-                if (perteAdversaire <= -5.0 && perteAdversaire >= -8.0
-                        && adversaire.getEspece().equals(espaceAdversaireDuTour)
-                        && !OBJETS_RETIRES.contains(adversaire.getEspece())
-                        && (coupAdversaireDuTour == null
-                            || !COUPS_SOIN_OU_DRAIN.contains(coupAdversaireDuTour.showdownId()))
-                        && !"wish".equals(coupAdversaireTourPrecedent)
-                        && FieldTracker.construireField().getTerrain() != Field.TypeTerrain.HERBU) {
-                    OBJETS_CONFIRMES.put(adversaire.getEspece(), "Restes");
-                }
+                // (Restes : plus déduits des PV, le jeu les annonce)
                 if (coupAdversaireDuTour != null) {
                     coupAdversaireTourPrecedent = coupAdversaireDuTour.showdownId();
                 }
@@ -394,6 +407,8 @@ public final class ObservationCollector {
                 adversaireAAgiEnPremier = null;
         especeAdvActeur = null;
         especeJoueurActeur = null;
+        reculOrbeVieAdvCeTour = false;
+        coupAdvRateCeTour = false;
                 return;
             }
 
@@ -421,55 +436,25 @@ public final class ObservationCollector {
                 marquerObjetJoueurDetruit(joueur.getEspece());
             }
 
-            // Détection Casque Brut : tour "propre" où le joueur attaque au contact,
-            // l'adversaire ne l'attaque pas, et le joueur perd des PV quand même.
-            // 12.5% = Épine de Fer/Peau Dure seule | ~17% = Casque Brut | ~29% = les deux
-            if (coupJoueurDuTour != null
-                    && com.tropimon.randompvp.calc.ContactMoves.estContact(coupJoueurDuTour.showdownId())
-                    && perteAdversaire >= 0.5
-                    && perteJoueur >= 14.0 && perteJoueur <= 33.0
-                    && !(perteJoueur > 20.0 && perteJoueur < 25.0)
-                    && adversaireNAPasAttaque()
-                    && joueur.getStatut() == Pokemon.Statut.AUCUN
-                    && !joueurVampigraine
-                    && !"Orbe Vie".equals(joueur.getObjet())
-                    && !OBJETS_RETIRES.contains(adversaire.getEspece())
-                    && (FieldTracker.construireField().getMeteo() != Field.Meteo.SABLE
-                        || immuniseSableSimple(joueur))) {
-                OBJETS_CONFIRMES.put(adversaire.getEspece(), "Casque Brut");
-                // 25-33% = Casque Brut + Épine de Fer/Peau Dure : le talent aussi est un fait
-                if (perteJoueur >= 25.0) {
-                    TALENTS_CHIP_CONFIRMES.add(adversaire.getEspece());
-                }
-            }
-
-            // Détection Orbe Vie : tour "propre" où l'adversaire attaque
-            // (dégâts, pas statut, pas de recul propre à la capacité) et
-            // perd ~10% de ses PV max le même tour, sans autre source
-            // possible (statut, Salaison, Vampigraine, sable non-immunisé,
-            // dégâts du joueur qui viendraient troubler la mesure).
-            if (coupAdversaireDuTour != null
-                    && !adversaireNAPasAttaque()
-                    && !com.tropimon.randompvp.calc.MoveFlags.aRecul(coupAdversaireDuTour.showdownId())
-                    && reculOrbeVieIsole(joueur, adversaire, perteAdversaire)
-                    && adversaire.getStatut() == Pokemon.Statut.AUCUN
-                    && !adversaireVampigraine
-                    && !adversaireSalaison
-                    && !OBJETS_CONFIRMES.containsKey(adversaire.getEspece())
-                    && !OBJETS_RETIRES.contains(adversaire.getEspece())
-                    && (FieldTracker.construireField().getMeteo() != Field.Meteo.SABLE
-                        || immuniseSableSimple(adversaire))) {
-                OBJETS_CONFIRMES.put(adversaire.getEspece(), "Orbe Vie");
-            }
+            // Casque Brut et Orbe Vie : plus déduits des pertes de PV. Le jeu
+            // annonce les deux (damage.rockyhelmet, damage.lifeorb), lus dans
+            // MoveUseTracker et traiterMessageObjet. La déduction par les PV
+            // a confirmé une Orbe Vie sur un Carchacrok qui n'en avait pas
+            // (11/10), alors qu'il avait attaqué sans recul annoncé.
 
             // Vitesse : ordre d'action du tour écoulé, évalué avec l'état du
             // DÉBUT de ce tour (stages, météo, champ, Vent Arrière, statut).
             observerVitesse(adversaire, joueur);
 
-            if (coupAdversaireDuTour != null && perteJoueur >= 0.5) {
+            tenterExclureOrbeVie(adversaire, perteJoueur);
+
+            // Morphing : stats, types et talent copiés, les calculs ne
+            // correspondent plus au vrai Pokémon - aucune observation.
+            boolean morphing = joueurTransforme() || estTransforme(true, adversaire.getEspece());
+            if (coupAdversaireDuTour != null && perteJoueur >= 0.5 && !morphing) {
                 enregistrerObservation(true, perteJoueur, adversaire, joueur, coupAdversaireDuTour);
             }
-            if (coupJoueurDuTour != null && perteAdversaire >= 0.5) {
+            if (coupJoueurDuTour != null && perteAdversaire >= 0.5 && !morphing) {
                 enregistrerObservation(false, perteAdversaire, adversaire, joueur, coupJoueurDuTour);
             }
         }
@@ -490,6 +475,8 @@ public final class ObservationCollector {
         adversaireAAgiEnPremier = null;
         especeAdvActeur = null;
         especeJoueurActeur = null;
+        reculOrbeVieAdvCeTour = false;
+        coupAdvRateCeTour = false;
 
         tenterAppliquerHerbeBlanche(joueur, adversaire);
     }
@@ -697,52 +684,6 @@ public final class ObservationCollector {
         return (e.compteur() + e.pas() - 1) / e.pas();
     }
 
-    /**
-     * Vrai si la perte de PV de l'adversaire sur ce tour s'explique par le
-     * recul de l'Orbe Vie (10% des PV max).
-     *
-     * Cas simple : le joueur n'a pas attaqué, la perte EST le recul.
-     *
-     * Cas général : le joueur a aussi attaqué, donc la perte observée mélange
-     * ses dégâts et le recul. On soustrait les dégâts prévus pour isoler le
-     * résidu. C'est fiable ici précisément parce qu'on est en random battle :
-     * les stats défensives adverses sont connues (31 IV / 85 EV / neutre), donc
-     * la fourchette prévue est étroite — elle ne reflète que le jet de dégâts
-     * (85-100%), pas une incertitude sur le set. L'ancienne condition exigeait
-     * que le joueur n'attaque pas, ce qui ne se produit presque jamais : la
-     * détection ne se déclenchait quasiment pas.
-     *
-     * L'Orbe Vie adverse n'influe pas sur les dégâts que le JOUEUR inflige, il
-     * n'y a donc aucune circularité dans cette soustraction.
-     */
-    private static boolean reculOrbeVieIsole(Pokemon joueur, Pokemon adversaire, double perteAdversaire) {
-        if (coupJoueurDuTour == null || joueurNAPasAttaque()) {
-            return perteAdversaire >= 8.0 && perteAdversaire <= 12.0;
-        }
-        try {
-            MoveTemplate template = Moves.INSTANCE.getByName(coupJoueurDuTour.showdownId());
-            if (template == null) return false;
-            com.tropimon.randompvp.calc.Move capacite = convertirCapacite(template);
-            if (capacite == null) return false;
-
-            Pokemon defenseur = construireAdversaireEstime(adversaire);
-            Field terrain = FieldTracker.construireField();
-            DamageCalculator.Resultat prevu = DamageCalculator.calculer(
-                joueur, defenseur, capacite, terrain, terrain.getEcransAdversaire(), false);
-            if (prevu.immunise) {
-                return perteAdversaire >= 8.0 && perteAdversaire <= 12.0;
-            }
-
-            // Résidu possible une fois les dégâts du joueur retirés. Tolérance
-            // un peu plus large que la fenêtre 8-12% du cas simple, le résidu
-            // cumulant l'imprécision des deux mesures.
-            double residuMin = perteAdversaire - prevu.pourcentageMax;
-            double residuMax = perteAdversaire - prevu.pourcentageMin;
-            return residuMin >= 7.0 && residuMax <= 13.5;
-        } catch (Throwable e) {
-            return false;
-        }
-    }
 
     // ---------------------------------------------------------------------
     // Vitesse : Mouchoir Choix par impossibilité, plancher/plafond affichés.
@@ -765,6 +706,10 @@ public final class ObservationCollector {
             + " / moi " + joueur.getEspece() + " " + coupJoueurDuTour.showdownId() + " | "
             + (Boolean.TRUE.equals(adversaireAAgiEnPremier) ? "il a agi avant" : "j'ai agi avant") + " | ";
         if (prioriteObjetCeTour) { MessageDebugLogger.analyse(debut + "Vive-Griffe/Tir Vif : ignoré"); return; }
+        if (estTransforme(true, adversaire.getEspece()) || joueurTransforme()) {
+            MessageDebugLogger.analyse(debut + "Morphing : ignoré");
+            return;
+        }
         if (distorsionTourEcoule) { MessageDebugLogger.analyse(debut + "Distorsion : ignoré"); return; }
         // Le même Pokémon de chaque côté du début à la fin du tour, sinon
         // l'ordre observé ne concerne pas celui qu'on regarde (Demi-Tour...).
@@ -1119,6 +1064,224 @@ public final class ObservationCollector {
         return x.startsWith(y) || y.startsWith(x);
     }
 
+    // --- Objet reçu en cours de séjour (Pickpocket, Tour de Magie...) ---
+    // Le verrou Choix repart de zéro : la capacité utilisée AVANT d'avoir
+    // l'objet ne compte pas (le Tinkaton qui vole un Bandeau Choix après un
+    // Bluff, puis utilise Sabotage, n'avait pas "deux capacités sous Choix").
+    private static void objetAdversaireRecu(String espece) {
+        OBJETS_RETIRES.remove(espece);
+        OBJETS_CHOIX_EXCLUS.remove(espece);
+        PREUVE_PAS_CHOIX.remove(espece);
+        OBJETS_PROBABLES.remove(espece);
+        ORBE_VIE_EXCLUE.remove(espece);
+        if (espece != null && espece.equals(especeSejourAdv)) premierCoupSejourAdv = null;
+    }
+
+    // --- Pas d'Orbe Vie : il m'a touché sans que le jeu annonce le recul ---
+    private static boolean reculOrbeVieAdvCeTour = false;
+    // Son coup a raté, échoué, ou a été bloqué (Abri, immunité)
+    private static boolean coupAdvRateCeTour = false;
+    private static final Set<String> ORBE_VIE_EXCLUE = new HashSet<>();
+
+    private static void tenterExclureOrbeVie(Pokemon adversaire, double perteJoueur) {
+        String espece = adversaire.getEspece();
+        if (ORBE_VIE_EXCLUE.contains(espece) || reculOrbeVieAdvCeTour || coupAdvRateCeTour) return;
+        if ("Orbe Vie".equals(OBJETS_CONFIRMES.get(espece))) return;
+        if (coupAdversaireDuTour == null || adversaireNAPasAttaque() || perteJoueur < 0.5) return;
+        if (!espece.equals(espaceAdversaireDuTour) || FieldTracker.joueurAUnClone()) return;
+        // Le coup doit être celui qui m'a touché (pas un dégât annexe)
+        CoupRecu cr = coupRecuTourEcoule;
+        if (cr == null || cr.clone || !coupAdversaireDuTour.showdownId().equals(cr.idCoup)) return;
+        MoveTemplate t = Moves.INSTANCE.getByName(cr.idCoup);
+        if (t == null || "status".equalsIgnoreCase(t.getDamageCategory().getName())) return;
+        // Garde Magik : pas de recul ; Sans Limite : pas de recul sur ses coups à effet
+        Set<String> bruts = talentsBrutsPossibles(adversaire);
+        if (bruts.contains("magicguard") || bruts.contains("sheerforce")) return;
+        if (estTransforme(true, espece)) return;
+        ORBE_VIE_EXCLUE.add(espece);
+        if ("Orbe Vie".equals(OBJETS_PROBABLES.get(espece))) OBJETS_PROBABLES.remove(espece);
+        ProfilAdversaire profil = PROFILS.get(espece);
+        if (profil != null) {
+            for (StatHypothesis h : new StatHypothesis[]{profil.attaque, profil.attaqueSpe, profil.defense, profil.defenseSpe}) {
+                h.objetsPossibles.remove("Orbe Vie");
+            }
+        }
+        MessageDebugLogger.analyse("OBJET " + espece + " : pas d'Orbe Vie (" + cr.idCoup
+            + " m'a touché sans recul annoncé)");
+    }
+
+    // --- Morphing (Métamorph, Imposteur) : "moi:espèce" / "adv:espèce" ---
+    private static final Set<String> TRANSFORMES = new HashSet<>();
+
+    /** Mon Pokémon actif est transformé (Morphing vu, ou espèce de combat différente de sa fiche). */
+    private static boolean joueurTransforme() {
+        if (TRANSFORMES.stream().anyMatch(k -> k.startsWith("moi:"))) return true;
+        try {
+            return BattleStateTracker.joueurEstTransforme();
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    private static boolean estTransforme(boolean campAdverse, String espece) {
+        if (campAdverse && cibleMorphingAdversaire != null) return true;
+        return espece != null && TRANSFORMES.contains((campAdverse ? "adv:" : "moi:") + espece);
+    }
+
+    // Mon Métamorph : la cible copiée (instantané au moment du Morphing,
+    // valable même si l'adversaire change ensuite de Pokémon) et ses
+    // capacités copiées, lues dans le menu d'attaque du jeu.
+    private static Pokemon cibleMorphingJoueur = null;
+    private static List<String> capacitesMorphing = new ArrayList<>();
+
+    // Métamorph ADVERSE : mon Pokémon qu'il a copié (stats exactes) et mes
+    // capacités qu'il a donc aussi.
+    private static Pokemon cibleMorphingAdversaire = null;
+    private static String especeMorphingAdversaire = null;   // son espèce d'origine (Métamorph...)
+    private static List<String> capacitesMorphingAdversaire = new ArrayList<>();
+
+    /** Mes capacités copiées par le Métamorph adverse (id Showdown), vide sinon. */
+    public static List<String> getCapacitesMorphingAdversaire() {
+        return cibleMorphingAdversaire == null ? List.of() : capacitesMorphingAdversaire;
+    }
+
+    /** Espèce de mon Pokémon copié par le Métamorph adverse, ou null. */
+    public static String getCibleMorphingAdversaire() {
+        return cibleMorphingAdversaire == null ? null : cibleMorphingAdversaire.getEspece();
+    }
+
+    /**
+     * L'adversaire tel que le HUD doit le calculer : son estimation, ou, s'il
+     * s'est transformé en mon Pokémon, une copie exacte de mon Pokémon (stats,
+     * types, talent) avec ses PV, son statut et son objet à lui.
+     */
+    public static Pokemon adversaireAffiche(Pokemon adversaireBase) {
+        Pokemon estime = construireAdversaireEstime(adversaireBase);
+        Pokemon cible = cibleMorphingAdversaire;
+        if (cible == null) return estime;
+        // Son espèce d'origine : celle vue au Morphing, sauf si le jeu affichait
+        // déjà l'espèce copiée (alors Métamorph, le seul cas courant).
+        String origine = especeMorphingAdversaire == null || especeMorphingAdversaire.equals(cible.getEspece())
+            ? "ditto" : especeMorphingAdversaire;
+        int pvMax;
+        String objet;
+        if (origine.equals(adversaireBase.getEspece())) {
+            pvMax = estime.getPvMax();
+            objet = estime.getObjet();
+        } else {
+            pvMax = pvMaxEstime(origine, adversaireBase.getNiveau());
+            objet = OBJETS_RETIRES.contains(origine) ? null
+                : OBJETS_CONFIRMES.containsKey(origine) ? OBJETS_CONFIRMES.get(origine)
+                : objetSmogonProbable(origine, SmogonDataLoader.getDonnees(origine));
+        }
+        Pokemon.Builder b = Pokemon.builder(cible.getEspece(), cible.getNiveau(), cible.getType1(), cible.getType2())
+            .nature(cible.getNature())
+            .poids(cible.getPoidsHg());
+        if (cible.getTalent() != null) b.talent(cible.getTalent());
+        for (Stat st : Stat.values()) {
+            b.statBase(st, cible.getStatBase(st)).ev(st, cible.getEv(st)).iv(st, cible.getIv(st));
+        }
+        Pokemon copie = b.build();
+        copie.setCampAdverse(true);
+        if (pvMax > 0) copie.setPvMaxOverride(pvMax);
+        copie.setPvActuels((int) Math.round(adversaireBase.getPourcentagePv() / 100.0 * copie.getPvMax()));
+        copie.setStatut(adversaireBase.getStatut());
+        copie.setObjet(objet);
+        return copie;
+    }
+
+    /** PV max d'une espèce à ce niveau avec 252 EV et 31 IV (0 si inconnue). */
+    private static int pvMaxEstime(String espece, int niveau) {
+        try {
+            Species sp = com.cobblemon.mod.common.api.pokemon.PokemonSpecies.INSTANCE.getByName(espece);
+            if (sp == null) return 0;
+            Integer base = sp.getBaseStats().get(com.cobblemon.mod.common.api.pokemon.stats.Stats.HP);
+            if (base == null) return 0;
+            return ((2 * base + 31 + 63) * niveau) / 100 + niveau + 10;
+        } catch (Throwable t) {
+            return 0;
+        }
+    }
+
+    /** La cible copiée par mon Métamorph, ou null (pas de Morphing vu). */
+    public static Pokemon getCibleMorphingJoueur() {
+        return cibleMorphingJoueur;
+    }
+
+    /** Capacités copiées par mon Métamorph (id Showdown), vide si pas encore lues. */
+    public static List<String> getCapacitesMorphing() {
+        return capacitesMorphing;
+    }
+
+    /**
+     * Métamorph transformé : stats (EV et nature compris), types et talent de
+     * la cible telle qu'estimée (31 IV, set Smogon ou mieux si observé), mais
+     * PV, objet et statut de Métamorph - c'est ce que copie Morphing.
+     */
+    public static Pokemon construireMorphing(Pokemon metamorph, Pokemon cibleBase) {
+        Pokemon copie = construireAdversaireEstime(cibleBase);
+        copie.setCampAdverse(false);
+        copie.setPvMaxOverride(metamorph.getPvMax());
+        copie.setPvActuels(metamorph.getPvActuels());
+        copie.setStatut(metamorph.getStatut());
+        copie.setObjet(metamorph.getObjet());
+        return copie;
+    }
+
+    private static void suivreMorphingEtRates(String cle, Object[] args) {
+        if (cle.equals("cobblemon.battle.transform") && args.length > 0) {
+            Boolean adverse = determinerAttaquant(MoveUseTracker.extraireProprietaire(args[0]));
+            if (adverse == null) return;
+            Pokemon p = adverse ? BattleStateTracker.getAdversaireActif() : BattleStateTracker.getJoueurActif();
+            if (adverse) {
+                // Métamorph adverse transformé en MON Pokémon : copie exacte de
+                // ses stats (connues), de ses capacités et de ses boosts.
+                especeMorphingAdversaire = p != null ? p.getEspece() : null;
+                cibleMorphingAdversaire = BattleStateTracker.getJoueurActifDepuisEquipe();
+                if (cibleMorphingAdversaire == null) cibleMorphingAdversaire = BattleStateTracker.getJoueurActif();
+                if (cibleMorphingAdversaire != null) appliquerObjetReelJoueur(cibleMorphingAdversaire);
+                capacitesMorphingAdversaire = new ArrayList<>();
+                try {
+                    com.cobblemon.mod.common.pokemon.Pokemon complet = BattleStateTracker.getPokemonCompletJoueur();
+                    if (complet != null) {
+                        for (com.cobblemon.mod.common.api.moves.Move m : complet.getMoveSet()) {
+                            if (m != null) capacitesMorphingAdversaire.add(m.getName());
+                        }
+                    }
+                } catch (Exception ignored) {
+                }
+                for (Stat st : Stat.values()) {
+                    if (st != Stat.PV) BoostTracker.forcerStageAdversaire(st, BoostTracker.getStageJoueur(st));
+                }
+            }
+            if (!adverse) {
+                // Morphing copie aussi les boosts de la cible
+                cibleMorphingJoueur = BattleStateTracker.getAdversaireActif();
+                for (Stat st : Stat.values()) {
+                    if (st != Stat.PV) BoostTracker.forcerStageJoueur(st, BoostTracker.getStageAdversaire(st));
+                }
+                capacitesMorphing = new ArrayList<>();
+            }
+            if (p != null && TRANSFORMES.add((adverse ? "adv:" : "moi:") + p.getEspece())) {
+                MessageDebugLogger.analyse("MORPHING " + p.getEspece() + (adverse ? " (adverse)" : " (moi)")
+                    + (!adverse && cibleMorphingJoueur != null ? " en " + cibleMorphingJoueur.getEspece() : "")
+                    + " : mesures ignorées tant qu'il reste sur le terrain");
+            }
+        } else if (cle.startsWith("cobblemon.battle.switch.other") || cle.startsWith("cobblemon.battle.withdraw.other")) {
+            TRANSFORMES.removeIf(k -> k.startsWith("adv:"));
+            cibleMorphingAdversaire = null;
+            especeMorphingAdversaire = null;
+            capacitesMorphingAdversaire = new ArrayList<>();
+        } else if (cle.startsWith("cobblemon.battle.switch.self") || cle.startsWith("cobblemon.battle.withdraw.self")) {
+            TRANSFORMES.removeIf(k -> k.startsWith("moi:"));
+            cibleMorphingJoueur = null;
+            capacitesMorphing = new ArrayList<>();
+        } else if (dernierCoupEstAdverse && (cle.equals("cobblemon.battle.missed") || cle.equals("cobblemon.battle.fail")
+                || cle.equals("cobblemon.battle.immune") || cle.startsWith("cobblemon.battle.activate.protect"))) {
+            coupAdvRateCeTour = true;
+        }
+    }
+
     // --- Torche activée : x1,5 sur l'Attaque des capacités Feu ---
     // Activée en absorbant une capacité Feu, jusqu'à la sortie du terrain.
     // "adv:espèce" ou "moi:espèce".
@@ -1237,6 +1400,12 @@ public final class ObservationCollector {
 
     // Objet déduit par élimination sur les dégâts (pas une preuve) : espèce -> objet
     private static final Map<String, String> OBJETS_PROBABLES = new HashMap<>();
+    private static final Map<String, String> RAISONS_PROBABLES = new HashMap<>();
+
+    /** Pourquoi cet objet est supposé (affiché dans le HUD), ou null. */
+    public static String getRaisonObjetProbable(String espece) {
+        return getObjetProbable(espece) == null ? null : RAISONS_PROBABLES.get(espece);
+    }
 
     /** Objet que les dégâts désignent, sans être prouvé (null si aucun ou si confirmé/retiré). */
     public static String getObjetProbable(String espece) {
@@ -1549,9 +1718,41 @@ public final class ObservationCollector {
     }
 
     /** Analyse un coup reçu ; renvoie la ligne de log (mesures et conclusion). */
+    // --- Set moins offensif que l'estimation (Pyrobut de soutien...) ---
+    // Facteur maximal sur sa stat offensive (espèce -> stat -> facteur < 1)
+    // et nombre de coups qui l'ont mesuré.
+    private static final Map<String, Map<Stat, Double>> PLAFONDS_OFFENSIFS = new HashMap<>();
+    private static final Map<String, Integer> MESURES_PLAFOND = new HashMap<>();
+    private static final Set<String> PLAFONDS_ACTIFS = new HashSet<>();
+
+    /** Facteur à appliquer à sa stat offensive (1.0 = aucun), une fois établi. */
+    private static double plafondOffensif(String espece, Stat stat) {
+        if (!PLAFONDS_ACTIFS.contains(espece)) return 1.0;
+        Map<Stat, Double> m = PLAFONDS_OFFENSIFS.get(espece);
+        if (m == null || !m.containsKey(stat)) return 1.0;
+        return m.get(stat);
+    }
+
+    /** "Atq x0.80" si son set s'est montré moins offensif que l'estimation, sinon null. */
+    public static String getPlafondOffensifTexte(String espece) {
+        if (!PLAFONDS_ACTIFS.contains(espece)) return null;
+        Map<Stat, Double> m = PLAFONDS_OFFENSIFS.get(espece);
+        if (m == null || m.isEmpty()) return null;
+        StringBuilder sb = new StringBuilder();
+        for (Map.Entry<Stat, Double> e : m.entrySet()) {
+            if (sb.length() > 0) sb.append(", ");
+            sb.append(e.getKey() == Stat.ATTAQUE ? "Atq" : "AtqSpé").append(" x")
+                .append(String.format("%.2f", e.getValue()));
+        }
+        return sb.toString();
+    }
+
     private static String analyserCoupRecu(CoupRecu cr) {
         StringBuilder log = new StringBuilder();
         if (cr.invalide) return "mesure invalide (soin, dégât annexe, switch ou capacité coûtant des PV après le coup)";
+        if (estTransforme(true, cr.especeAttaquant) || joueurTransforme()) {
+            return "Morphing en cours : ignoré";
+        }
         if (cr.clone) return "touché sur un Clone";
 
         MoveTemplate template = Moves.INSTANCE.getByName(cr.idCoup);
@@ -1589,6 +1790,10 @@ public final class ObservationCollector {
             .append(", ").append(physique ? "Atq " : "AtqSpé ").append(estime.getStatCalculee(statAtk))
             .append(" stage ").append(physique ? cr.stageAtk : cr.stageAtkSpe)
             .append(", météo ").append(cr.etat.getMeteo()).append(", champ ").append(cr.etat.getTerrain()).append(']');
+
+        // Pas de "set moins offensif" en random battle : les EV (85) et la
+        // nature (neutre) sont connus, un coup plus faible que prévu vient de
+        // l'objet ou du talent, pas d'un autre réglage de stats.
 
         // --- Détection Bandeau / Lunettes Choix ---
         if (cr.crit) return log.append(" | coup critique : pas de conclusion").toString();
@@ -1934,6 +2139,7 @@ public final class ObservationCollector {
                     confirmerObjet(espece, objetEstime, "dégâts inexplicables sans cet objet ("
                         + profil.getNbObservations() + " coups mesurés)");
                     // (appelé à chaque image : une ligne de log au changement)
+                    RAISONS_PROBABLES.put(espece, "seul objet qui colle aux dégâts mesurés");
                     if (!objetEstime.equals(OBJETS_PROBABLES.put(espece, objetEstime))) {
                         MessageDebugLogger.analyse("OBJET " + espece + " : " + objetEstime
                             + " confirmé par élimination (" + profil.getNbObservations()
@@ -2234,16 +2440,35 @@ public final class ObservationCollector {
         }
     }
 
+    /**
+     * Évoluroc supposé pour une sous-évolution (le Pokémon peut encore
+     * évoluer) : en compétitif, c'est presque toujours son objet. Écarté
+     * seulement si Smogon montre clairement autre chose (Évoluroc absent du
+     * top et sous 30 %). Utilisé dans les calculs, affiché comme supposé ;
+     * un objet prouvé (message du jeu, Sabotage...) le remplace.
+     */
     private static void tenterConfirmerEvoluroc(String espece, SmogonDataLoader.SmogonPokemonData smogon) {
-        if (smogon == null || smogon.topItemsShowdownId().isEmpty()) return;
         if (OBJETS_CONFIRMES.containsKey(espece) || OBJETS_RETIRES.contains(espece)) return;
-        String topObjet = ShowdownIdMapper.objet(smogon.topItemsShowdownId().get(0));
-        // Probable seulement (part d'usage Smogon, aucune observation) : plus
-        // de "confirmé" - le Piloswine l'affichait ainsi avant toute preuve.
-        if ("Évoluroc".equals(topObjet) && smogon.topItemUsageFraction() >= 0.50
-                && !"Évoluroc".equals(OBJETS_PROBABLES.put(espece, "Évoluroc"))) {
-            MessageDebugLogger.analyse("OBJET " + espece + " : Évoluroc probable ("
-                + Math.round(smogon.topItemUsageFraction() * 100) + " % des sets Smogon)");
+        if (OBJETS_PROBABLES.containsKey(espece)) return;
+        if (!peutEvoluer(espece)) return;
+        boolean enTete = false;
+        if (smogon != null && !smogon.topItemsShowdownId().isEmpty()) {
+            enTete = "Évoluroc".equals(ShowdownIdMapper.objet(smogon.topItemsShowdownId().get(0)));
+        }
+        double part = SmogonDataLoader.fractionObjet(espece, "eviolite");
+        if (smogon != null && !enTete && part < 0.30) return;
+        OBJETS_PROBABLES.put(espece, "Évoluroc");
+        RAISONS_PROBABLES.put(espece, "sous-évolution" + (part >= 0 ? ", " + Math.round(part * 100) + " % Smogon" : ""));
+        MessageDebugLogger.analyse("OBJET " + espece + " : Évoluroc supposé (" + RAISONS_PROBABLES.get(espece) + ")");
+    }
+
+    /** Vrai si cette espèce a encore une évolution (Évoluroc possible). */
+    private static boolean peutEvoluer(String espece) {
+        try {
+            Species sp = com.cobblemon.mod.common.api.pokemon.PokemonSpecies.INSTANCE.getByName(espece);
+            return sp != null && !sp.getEvolutions().isEmpty();
+        } catch (Throwable t) {
+            return false;
         }
     }
 
@@ -2320,6 +2545,22 @@ public final class ObservationCollector {
             return;
         }
         etatVide = false;
+        if (finDeTourEnAttenteMs != 0 && System.currentTimeMillis() - finDeTourEnAttenteMs >= DELAI_PV_MS) {
+            viderFinDeTourEnAttente();
+        }
+
+        // Capacités copiées par mon Métamorph : lues dans le menu d'attaque
+        // dès qu'il est disponible, gardées tant qu'il reste transformé.
+        try {
+            if (BattleStateTracker.joueurEstTransforme()) {
+                List<String> ids = BattleStateTracker.getCapacitesRequeteJoueur();
+                if (ids != null && !ids.isEmpty() && !ids.contains("transform") && !ids.equals(capacitesMorphing)) {
+                    capacitesMorphing = new ArrayList<>(ids);
+                    MessageDebugLogger.analyse("MORPHING capacités copiées : " + ids);
+                }
+            }
+        } catch (Exception ignored) {
+        }
 
         // Détection Restes : les PV adverses remontent de ~1/16 depuis leur point bas.
         // Contrairement au delta net par tour, ceci voit le soin même si le joueur
@@ -2343,29 +2584,12 @@ public final class ObservationCollector {
             new double[]{adv.getPourcentagePv(), adv.getStatut().ordinal()});
 
         double remontee = pvNow - pvPlancherAdv;
-        if (remontee >= 4.5 && remontee <= 8.0
-                && adv.getStatut() != Pokemon.Statut.POISON
-                && adv.getStatut() != Pokemon.Statut.POISON_GRAVE
-                && !OBJETS_RETIRES.contains(adv.getEspece())
-                && (coupAdversaireDuTour == null
-                    || !COUPS_SOIN_OU_DRAIN.contains(coupAdversaireDuTour.showdownId()))
-                && !"wish".equals(coupAdversaireTourPrecedent)
-                && FieldTracker.construireField().getTerrain() != Field.TypeTerrain.HERBU) {
-            OBJETS_CONFIRMES.put(adv.getEspece(), "Restes");
-            pvPlancherAdv = pvNow;
-        } else if (remontee >= 1.5 && pvNow >= 99.5
-                && adv.getStatut() == Pokemon.Statut.AUCUN
-                && !OBJETS_RETIRES.contains(adv.getEspece())
-                && (coupAdversaireDuTour == null
-                    || !COUPS_SOIN_OU_DRAIN.contains(coupAdversaireDuTour.showdownId()))
-                && !"wish".equals(coupAdversaireTourPrecedent)
-                && FieldTracker.construireField().getTerrain() != Field.TypeTerrain.HERBU) {
-            // Soin plafonné par les PV max (ex: Restes à 97% ne rendent que 3%) :
-            // une petite remontée qui termine pile à 100% sans capacité de soin
-            // ne s'explique que par un objet de soin passif
-            OBJETS_CONFIRMES.put(adv.getEspece(), "Restes");
-            pvPlancherAdv = pvNow;
-        } else if (remontee >= 10.5 && remontee <= 14.0
+        // Restes, Boue Noire, baies : le jeu annonce ces soins (heal.leftovers,
+        // heal.blacksludge, enditem...), lus dans MoveUseTracker. Plus aucune
+        // déduction par la remontée des PV : un soin écarté (Vampipoing) laissait
+        // l'ancien point bas en place, et au tour suivant la même remontée était
+        // prise pour des Restes (Colossinge du 11/10).
+        if (remontee >= 10.5 && remontee <= 14.0
                 && (adv.getStatut() == Pokemon.Statut.POISON
                     || adv.getStatut() == Pokemon.Statut.POISON_GRAVE)
                 && !joueurVampigraine
@@ -2383,14 +2607,12 @@ public final class ObservationCollector {
                 && (coupAdversaireDuTour == null
                     || !COUPS_SOIN_OU_DRAIN.contains(coupAdversaireDuTour.showdownId()))
                 && !"wish".equals(coupAdversaireTourPrecedent)) {
-            // Baie Sitrus (ou équivalente) : restaure 1/4 des PV max, se
-            // déclenche sous 50% PV. Contrairement à Restes, l'objet est
-            // CONSOMMÉ - important pour Sabotage (Knock Off), qui ne doit
-            // plus appliquer son bonus x1.5 une fois la baie mangée.
-            OBJETS_RETIRES.add(adv.getEspece());
+            // Baie Sitrus probable : sa consommation est annoncée par le jeu
+            // (enditem), qui marque l'objet perdu. Rien de déduit ici.
             pvPlancherAdv = pvNow;
-        } else if (remontee > 8.0) {
-            // Gros soin (Vœu, Soin, drain...) : repartir de ce niveau
+        } else if (remontee > 1.0) {
+            // Tout autre soin (Vœu, Soin, drain, Restes annoncés...) : repartir
+            // de ce niveau, pour ne pas le recompter plus tard
             pvPlancherAdv = pvNow;
         }
     }
@@ -2559,6 +2781,7 @@ public final class ObservationCollector {
             if (fr == null) continue;
             if ("Ballon".equals(fr) && ballonExclu(espece)) continue;
             if (fr.endsWith(" Choix") && OBJETS_CHOIX_EXCLUS.contains(espece)) continue;
+            if ("Orbe Vie".equals(fr) && ORBE_VIE_EXCLUE.contains(espece)) continue;
             return fr;
         }
         return null;
@@ -2591,6 +2814,7 @@ public final class ObservationCollector {
         suivreCoupRecu(cle, contenu.getArgs());
         suivreVerrouChoix(cle, contenu.getArgs());
         suivreTorche(cle, contenu.getArgs());
+        suivreMorphingEtRates(cle, contenu.getArgs());
 
         if (cle.contains("quickclaw") || cle.contains("quickdraw") || cle.contains("custap")) {
             prioriteObjetCeTour = true;
@@ -2648,6 +2872,7 @@ public final class ObservationCollector {
             if (args.length == 0) return;
             String proprietaire = MoveUseTracker.extraireProprietaire(args[0]);
             if (!Boolean.TRUE.equals(determinerAttaquant(proprietaire))) return;
+            reculOrbeVieAdvCeTour = true;
             Pokemon adv = BattleStateTracker.getAdversaireActif();
             if (adv == null) return;
             confirmerObjet(adv.getEspece(), "Orbe Vie", "recul d'Orbe Vie annoncé par le jeu");
@@ -2787,8 +3012,8 @@ public final class ObservationCollector {
                 OBJETS_RETIRES.add(adv.getEspece());
             }
             if (Boolean.TRUE.equals(voleurEstAdversaire) && objetFr != null) {
+                objetAdversaireRecu(adv.getEspece());
                 confirmerObjet(adv.getEspece(), objetFr, "volé avec Pickpocket");
-                OBJETS_CHOIX_EXCLUS.remove(adv.getEspece());
             }
 
             // Côté joueur, pour le même filet de sécurité que pour le Ballon :
@@ -2807,6 +3032,46 @@ public final class ObservationCollector {
                 if (Boolean.FALSE.equals(victimeEstAdversaire)) {
                     marquerObjetJoueurDetruit(joueurActif2.getEspece());
                 }
+            }
+            return;
+        }
+
+        // Toute autre révélation d'objet par le jeu (Fouille, Tour de Magie,
+        // Passe-Passe, Passe-Cadeau, annonce d'entrée...) : "item.X", arg0 =
+        // le porteur, un argument "item.cobblemon.nom_objet". Le Ballon a déjà
+        // son traitement (annonce d'entrée) plus haut.
+        if (cle.startsWith("cobblemon.battle.item.") && !cle.contains("airballoon")) {
+            Object[] args = contenu.getArgs();
+            if (args.length < 2) return;
+            String suffixe = cle.substring("cobblemon.battle.item.".length());
+            String cleObjet = null;
+            for (int k = 1; k < args.length; k++) {
+                String c = cleDepuisArgument(args[k]);
+                if (c != null && c.startsWith("item.")) {
+                    cleObjet = c;
+                    break;
+                }
+            }
+            if (cleObjet == null) return;
+            String objetFr = ShowdownIdMapper.objet(cleObjet.substring(cleObjet.lastIndexOf('.') + 1).replace("_", ""));
+            ItemStack stack = stackDepuisCleBrute(cleObjet);
+            // Objet RECU en cours de combat (et non simplement révélé)
+            boolean recu = suffixe.contains("trick") || suffixe.contains("switcheroo") || suffixe.contains("bestow");
+            Boolean porteurAdverse = determinerAttaquant(MoveUseTracker.extraireProprietaire(args[0]));
+            if (Boolean.TRUE.equals(porteurAdverse)) {
+                Pokemon adv = BattleStateTracker.getAdversaireActif();
+                if (adv == null || objetFr == null) return;
+                if (recu) objetAdversaireRecu(adv.getEspece());
+                OBJETS_RETIRES.remove(adv.getEspece());
+                confirmerObjet(adv.getEspece(), objetFr, recu ? "reçu (" + suffixe + ")" : "révélé par le jeu (" + suffixe + ")");
+                MessageDebugLogger.analyse("OBJET " + adv.getEspece() + " : " + objetFr
+                    + (recu ? " reçu" : " révélé") + " par le jeu (" + cle + ")");
+            } else if (Boolean.FALSE.equals(porteurAdverse) && recu) {
+                Pokemon moi = BattleStateTracker.getJoueurActifDepuisEquipe();
+                if (moi == null) moi = BattleStateTracker.getJoueurActif();
+                if (moi == null) return;
+                marquerObjetJoueurConnu(moi.getEspece(), objetFr);
+                if (!stack.isEmpty()) OBJET_STACK_JOUEUR.put(cleEspece(moi.getEspece()), stack);
             }
         }
     }
@@ -2854,7 +3119,10 @@ public final class ObservationCollector {
             Pokemon adversaire = BattleStateTracker.getAdversaireActif();
             if (adversaire == null) return;
             String objetFr = ShowdownIdMapper.objet(objetShowdownId);
-            if (objetFr != null) OBJETS_CONFIRMES.put(adversaire.getEspece(), objetFr);
+            if (objetFr != null) {
+                OBJETS_RETIRES.remove(adversaire.getEspece());
+                confirmerObjet(adversaire.getEspece(), objetFr, "annoncé par le jeu");
+            }
         } catch (Exception ignored) {
         }
     }
@@ -3136,6 +3404,7 @@ public final class ObservationCollector {
 
     public static void reinitialiser() {
         MessageDebugLogger.analyse("=============== NOUVEAU COMBAT ===============");
+        finDeTourEnAttenteMs = 0;
         combatSauvageDetecte = false;
         OBJET_REEL_JOUEUR_CONNU.clear();
         OBJET_STACK_JOUEUR.clear();
@@ -3151,8 +3420,18 @@ public final class ObservationCollector {
         BALLON_ANNONCE.clear();
         ENTREE_ADVERSAIRE_MS.clear();
         PREUVE_PAS_CHOIX.clear();
+        ORBE_VIE_EXCLUE.clear();
+        TRANSFORMES.clear();
+        cibleMorphingJoueur = null;
+        capacitesMorphing = new ArrayList<>();
+        cibleMorphingAdversaire = null;
+        especeMorphingAdversaire = null;
+        capacitesMorphingAdversaire = new ArrayList<>();
+        reculOrbeVieAdvCeTour = false;
+        coupAdvRateCeTour = false;
         TORCHE_ACTIVE.clear();
         OBJETS_PROBABLES.clear();
+        RAISONS_PROBABLES.clear();
         OBJETS_CHOIX_EXCLUS.clear();
         especeSejourAdv = null;
         premierCoupSejourAdv = null;
@@ -3176,6 +3455,9 @@ public final class ObservationCollector {
         compteurAbrisAdversaire = 0;
         ADVERSAIRES_VUS.clear();
         FACTEURS.clear();
+        PLAFONDS_OFFENSIFS.clear();
+        MESURES_PLAFOND.clear();
+        PLAFONDS_ACTIFS.clear();
         PROFILS.clear();
         COUPS_ADVERSAIRE.clear();
         PP_UTILISES.clear();
@@ -3217,6 +3499,8 @@ public final class ObservationCollector {
         adversaireAAgiEnPremier = null;
         especeAdvActeur = null;
         especeJoueurActeur = null;
+        reculOrbeVieAdvCeTour = false;
+        coupAdvRateCeTour = false;
         espaceAdversaireDuTour = null;
     }
 
