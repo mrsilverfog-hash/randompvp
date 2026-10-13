@@ -230,6 +230,22 @@ public final class CalcOverlay implements HudRenderCallback {
             y += hauteurLigne;
         }
 
+        // --- Prescience : en haut, juste sous le titre, pour ne pas la rater ---
+        // Quand elle frappe et combien, une ligne par camp.
+        if (FieldTracker.getFutureSightJoueurTours() > 0) {
+            dessinerIcone(6, x, y);
+            dessinerTexte("Prescience sur toi, " + quandPrescience(FieldTracker.getFutureSightJoueurTours())
+                + texteDegatsPrescience(prescienceSurMoi), x + 13, y,
+                prescienceSurMoi != null && prescienceSurMoi.koGaranti ? COULEUR_KO : COULEUR_DANGER);
+            y += hauteurLigne;
+        }
+        if (FieldTracker.getFutureSightAdversaireTours() > 0) {
+            dessinerIcone(6, x, y);
+            dessinerTexte("Prescience sur adv, " + quandPrescience(FieldTracker.getFutureSightAdversaireTours())
+                + texteDegatsPrescience(prescienceSurAdv), x + 13, y, COULEUR_REVELE);
+            y += hauteurLigne;
+        }
+
         // Compteur de Repos : quand mon Pokémon se réveille exactement.
         int toursRepos = ObservationCollector.getToursAvantReveilRepos(joueur.getEspece());
         if (toursRepos < 0) {
@@ -670,22 +686,6 @@ public final class CalcOverlay implements HudRenderCallback {
             y += hauteurLigne;
         }
 
-        // --- Prescience : quand elle frappe et combien, une ligne par camp ---
-        if (FieldTracker.getFutureSightJoueurTours() > 0) {
-            dessinerIcone(6, x, y);
-            dessinerTexte("Prescience sur toi (" + quandPrescience(FieldTracker.getFutureSightJoueurTours()) + ")"
-                + texteDegatsPrescience(prescienceSurMoi), x + 13, y,
-                prescienceSurMoi != null && prescienceSurMoi.koGaranti ? COULEUR_KO : COULEUR_TEXTE);
-            y += hauteurLigne;
-        }
-        if (FieldTracker.getFutureSightAdversaireTours() > 0) {
-            dessinerIcone(6, x, y);
-            dessinerTexte("Prescience sur adv (" + quandPrescience(FieldTracker.getFutureSightAdversaireTours()) + ")"
-                + texteDegatsPrescience(prescienceSurAdv), x + 13, y,
-                prescienceSurAdv != null && prescienceSurAdv.koGaranti ? COULEUR_REVELE : COULEUR_TEXTE);
-            y += hauteurLigne;
-        }
-
         // --- Murs : une ligne dédiée par camp, petite icône à gauche ---
         if (FieldTracker.adversaireAUnEcran() && FieldTracker.getToursEcransAdversaireRestants() > 0) {
             StringBuilder noms = new StringBuilder();
@@ -946,7 +946,7 @@ public final class CalcOverlay implements HudRenderCallback {
     private String prescienceSurMoiKO = "";
 
     private static String quandPrescience(int tours) {
-        return tours <= 1 ? "fin de ce tour" : "fin du tour prochain";
+        return tours <= 1 ? "frappe à la fin de ce tour" : "frappe à la fin du tour prochain";
     }
 
     private String texteDegatsPrescience(DamageCalculator.Resultat r) {

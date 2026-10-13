@@ -1004,7 +1004,8 @@ public final class ObservationCollector {
         "smellingsalts", "wakeupslap", "trumpcard", "punishment", "beatup", "fling",
         "naturalgift", "present", "magnitude", "spitup", "foulplay", "photongeyser",
         "terablast", "shellsidearm", "ragingbull", "futuresight", "doomdesire", "bodypress",
-        "electroball", "hiddenpower", "terrainpulse", "tripleaxel", "triplekick", "populationbomb");
+        "electroball", "hiddenpower", "terrainpulse", "tripleaxel", "triplekick", "populationbomb",
+        "ficklebeam");
 
     // ---------------------------------------------------------------------
     // Bandeau Choix / Lunettes Choix : coup reçu trop fort.
@@ -1731,7 +1732,9 @@ public final class ObservationCollector {
                         .append(", PV ").append(def.getPvMax())
                         .append(physique ? ", Déf " : ", DéfSpé ")
                         .append(def.getStatCalculee(physique ? Stat.DEFENSE : Stat.DEFENSE_SPE))
-                        .append(", mon objet ").append(cd.attaquant.getObjet()).append(']');
+                        .append(", mon objet ").append(cd.attaquant.getObjet())
+                        .append(physique ? ", mon Atq " : ", mon AtqSpé ")
+                        .append(cd.attaquant.getStatCalculee(physique ? Stat.ATTAQUE : Stat.ATTAQUE_SPE)).append(']');
                     boolean coupsFixes = !cd.multiCoups || DamageCalculator.nombreDeCoupsFixe(capacite, cd.attaquant);
                     if (!r.immunise && !cd.ko && coupsFixes) {
                         if (perte > r.pourcentageMax + 2) log.append(" | PLUS que prévu");
@@ -1776,6 +1779,10 @@ public final class ObservationCollector {
         boolean physique = capacite.getCategorie() == com.tropimon.randompvp.calc.Move.Categorie.PHYSIQUE
             || "psyshock".equals(cd.idCoup) || "psystrike".equals(cd.idCoup) || "secretsword".equals(cd.idCoup);
         Stat statDef = physique ? Stat.DEFENSE : Stat.DEFENSE_SPE;
+        if (objet.equals(OBJETS_PROBABLES.get(def.getEspece()))
+                && retirerObjetDefensifDeduit(cd, def, capacite, perte, objet, log)) {
+            return true;
+        }
         // Random battle : stats exactes (85 EV, nature neutre), pas de pire cas à supposer
         Pokemon faible = def.copieAvecEvNature(Map.of(), null);
         DamageCalculator.Resultat avec = DamageCalculator.calculer(
@@ -1798,6 +1805,46 @@ public final class ObservationCollector {
         PREUVES_EXCLUSION.put(def.getEspece(), "pas de " + objet + " : " + preuve);
         log.append(" | PAS DE ").append(objet).append(" : ").append(pct(perte)).append(" > ")
             .append(pct(avec.pourcentageMax)).append(" max du set le moins résistant qui la tient");
+        return true;
+    }
+
+    /**
+     * Veste de Combat / Évoluroc seulement déduits (« seul objet qui explique
+     * les dégâts », EV supposés Smogon) : si un coup fait nettement plus que
+     * prévu avec l'objet et tombe pile dans la fourchette du même set SANS
+     * l'objet, la déduction était fausse. Log du 13/10 : Primarina supposé
+     * Veste de Combat, Bombe Beurk 48,9 % pour 31-37 % prévu (47-55 % sans) ;
+     * le mod gardait la Veste et baissait ses EV à la place.
+     */
+    private static boolean retirerObjetDefensifDeduit(CoupDonne cd, Pokemon def,
+            com.tropimon.randompvp.calc.Move capacite, double perte, String objet, StringBuilder log) {
+        Pokemon estime = def.copieAvecEvNature(Map.of(), null);
+        DamageCalculator.Resultat avec = DamageCalculator.calculer(
+            cd.attaquant, estime, capacite, cd.etat, cd.etat.getEcransAdversaire(), false);
+        estime.setObjet(null);
+        DamageCalculator.Resultat sans = DamageCalculator.calculer(
+            cd.attaquant, estime, capacite, cd.etat, cd.etat.getEcransAdversaire(), false);
+        if (avec.immunise || sans.immunise) return false;
+        double marge = Math.max(1.5, avec.pourcentageMax * 0.05);
+        if (perte <= avec.pourcentageMax + marge) return false;
+        if (perte < sans.pourcentageMin - marge || perte > sans.pourcentageMax + marge) return false;
+        String espece = def.getEspece();
+        String nomCoup = cd.idCoup;
+        try {
+            MoveTemplate t = Moves.INSTANCE.getByName(cd.idCoup);
+            if (t != null) nomCoup = t.getDisplayName().getString();
+        } catch (Exception ignored) {
+        }
+        OBJETS_EXCLUS.computeIfAbsent(espece, k -> new HashSet<>()).add(objet);
+        OBJETS_PROBABLES.remove(espece, objet);
+        RAISONS_PROBABLES.remove(espece);
+        PREUVES_EXCLUSION.put(espece, String.format(java.util.Locale.FRANCE,
+            "pas de %s : %s %.1f %% (%.0f-%.0f %% sans, %.0f %% max avec)", objet, nomCoup, perte,
+            sans.pourcentageMin, sans.pourcentageMax, avec.pourcentageMax));
+        log.append(" | ").append(objet.toUpperCase(java.util.Locale.FRANCE)).append(" DÉMENTIE : ")
+            .append(pct(perte)).append(" colle au même set sans objet (").append(pct(sans.pourcentageMin))
+            .append(" - ").append(pct(sans.pourcentageMax)).append(')');
+        MessageDebugLogger.analyse("OBJET " + espece + " : " + objet + " retiré (déduction démentie par " + cd.idCoup + ")");
         return true;
     }
 
@@ -2522,6 +2569,7 @@ public final class ObservationCollector {
     private static void enregistrerObservation(boolean adversaireEtaitAttaquant, double perte,
                                                 Pokemon adversaire, Pokemon joueur,
                                                 MoveUseTracker.CoupDetecte coup) {
+        if (PUISSANCE_NON_MODELISEE.contains(coup.showdownId())) return;
         MoveTemplate template = Moves.INSTANCE.getByName(coup.showdownId());
         if (template == null) return;
         com.tropimon.randompvp.calc.Move capacite = convertirCapacite(template);
@@ -2679,6 +2727,12 @@ public final class ObservationCollector {
                 if (objetEstime == null) objetEstime = extraireObjetUnique(profil.defense);
                 if (objetEstime == null) objetEstime = extraireObjetUnique(profil.defenseSpe);
                 if (objetEstime != null && objetExclu(espece, objetEstime)) objetEstime = null;
+                // Déjà exclus par un fait (deux capacités sans sortir, coup sans
+                // recul annoncé) : la déduction par les pertes ne les remet pas
+                // (TropiCalc 13/10 : Dragapult « Lunettes Choix probable » alors
+                // que le Choix était exclu, Hydrapple « Orbe Vie » sans recul).
+                if (objetEstime != null && objetEstime.endsWith("Choix") && OBJETS_CHOIX_EXCLUS.contains(espece)) objetEstime = null;
+                if ("Orbe Vie".equals(objetEstime) && ORBE_VIE_EXCLUE.contains(espece)) objetEstime = null;
                 if (objetEstime != null) {
                     b.objet(objetEstime);
                     // Random battle : "confirmé", pas seulement "probable" comme
@@ -4008,10 +4062,17 @@ public final class ObservationCollector {
         else lanceurPrescienceAdvBase = null;
     }
 
+    /** Prescience tombée dans le vide (cible K.O.) : rien à mesurer. */
+    public static void abandonnerPrescience(boolean surAdversaire) {
+        if (surAdversaire) lanceurPrescienceJoueur = null;
+        else lanceurPrescienceAdvBase = null;
+    }
+
     // Impact de Prescience mesuré à la fin du tour (vérifie la ligne du HUD)
     private static String prescienceCible = null;
     private static boolean prescienceSurAdv = false;
     private static double prescienceAvant = -1, prescienceMin = 0, prescienceMax = 0;
+    private static String prescienceDetail = "";
 
     private static void photographierPrescience(boolean surAdversaire) {
         prescienceCible = null;
@@ -4043,6 +4104,9 @@ public final class ObservationCollector {
         prescienceSurAdv = surAdversaire;
         prescienceMin = r.pourcentageMin;
         prescienceMax = r.pourcentageMax;
+        prescienceDetail = " [lanceur " + lanceur.getEspece() + " AtqSpé " + lanceur.getStatCalculee(Stat.ATTAQUE_SPE)
+            + " objet " + lanceur.getObjet() + " | cible PV " + cible.getStatCalculee(Stat.PV)
+            + " DéfSpé " + cible.getStatCalculee(Stat.DEFENSE_SPE) + " objet " + cible.getObjet() + "]";
     }
 
     private static void journaliserPrescience() {
@@ -4054,7 +4118,7 @@ public final class ObservationCollector {
         double perte = prescienceAvant - actuel.getPourcentagePv();
         MessageDebugLogger.analyse("PRESCIENCE sur " + cible + " | PV avant " + pct(prescienceAvant) + " | perte "
             + pct(perte) + (actuel.getPvActuels() <= 0 ? " K.O. (borne basse)" : "") + " | prévu " + pct(prescienceMin)
-            + " - " + pct(prescienceMax) + " (Leftovers et autres soins non retirés)");
+            + " - " + pct(prescienceMax) + prescienceDetail + " (Leftovers et autres soins non retirés)");
     }
 
     /** Mon Pokémon qui a lancé la Prescience en cours sur l'adversaire, ou null. */
