@@ -2041,6 +2041,12 @@ public final class ObservationCollector {
         return 1.0;
     }
 
+    // Plancher offensif (set plus offensif) : pas mesuré en random (stats
+    // exactes), structures gardées vides pour le code commun avec TropiCalc.
+    private static final Map<String, Map<Stat, Double>> PLANCHERS_OFFENSIFS = new HashMap<>();
+    private static final Map<String, Integer> MESURES_PLANCHER = new HashMap<>();
+    private static final Set<String> PLANCHERS_ACTIFS = new HashSet<>();
+
     /** "moins offensif que prévu : Atq x0,80" (ou plus), null si rien d'établi. */
     public static String getPlafondOffensifTexte(String espece) {
         StringBuilder sb = new StringBuilder();
