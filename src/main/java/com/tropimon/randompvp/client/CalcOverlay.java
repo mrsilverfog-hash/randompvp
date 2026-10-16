@@ -296,7 +296,8 @@ public final class CalcOverlay implements HudRenderCallback {
         // connu, pour anticiper le pire cas de priorité.
         // Seul un objet CONFIRMÉ compte : l'objet Smogon le plus joué n'est
         // qu'une supposition et ne doit pas multiplier la vitesse affichée.
-        if (!objetAdvConnu) {
+        // Choix exclu (deux capacités sans sortir) : pas de Mouchoir possible
+        if (!objetAdvConnu && !ObservationCollector.estChoixExclu(adversaireBase.getEspece())) {
             int vitMouchoir = vitesseAdversaireAffichee(adversaire, "Mouchoir Choix");
             String texteMouchoir = String.format(" (%d)", vitMouchoir);
             dessinerTexte(texteMouchoir, x + client.textRenderer.getWidth(texteVitesse), y, COULEUR_MOUCHOIR);
@@ -889,6 +890,9 @@ public final class CalcOverlay implements HudRenderCallback {
         if (!estOrbeVie && !estBandeau && !estLunettes) return null;
         if (estBandeau && !estPhysique) return null;
         if (estLunettes && estPhysique) return null;
+        // Objet déjà écarté par un fait : plus de pire cas à prévoir
+        if ((estBandeau || estLunettes) && ObservationCollector.estChoixExclu(espece)) return null;
+        if (estOrbeVie && ObservationCollector.estOrbeVieExclue(espece)) return null;
 
         // Déjà l'objet actif : le range normal l'inclut déjà, pas la peine de redire
         if (objetProbable.equals(adversaire.getObjet())) return null;
