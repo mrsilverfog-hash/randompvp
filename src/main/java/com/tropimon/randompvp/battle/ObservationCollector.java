@@ -3771,8 +3771,26 @@ public final class ObservationCollector {
         return !objetExclu(espece, fr);
     }
 
+    // Pokémon qui peut encore évoluer : Évoluroc quasi certain (x1,5 Déf et
+    // Déf. Spé.). Lu dans les données d'espèce de Cobblemon.
+    private static final Map<String, Boolean> PRE_EVOLUTIONS = new HashMap<>();
+
+    static boolean estPreEvolution(String espece) {
+        if (espece == null) return false;
+        return PRE_EVOLUTIONS.computeIfAbsent(espece, e -> {
+            try {
+                Species sp = com.cobblemon.mod.common.api.pokemon.PokemonSpecies.INSTANCE.getByName(
+                    e.toLowerCase(java.util.Locale.ROOT).replaceAll("[^a-z0-9]", ""));
+                return sp != null && !sp.getEvolutions().isEmpty();
+            } catch (Throwable t) {
+                return false;
+            }
+        });
+    }
+
     private static String objetSmogonProbable(String espece, SmogonDataLoader.SmogonPokemonData smogon) {
-        // Évoluroc : seul objet que Smogon prédit bien (Pokémon non évolués)
+        // Pokémon qui peut encore évoluer : Évoluroc d'abord
+        if (estPreEvolution(espece) && objetPossible(espece, "Évoluroc")) return "Évoluroc";
         if (smogon != null && !smogon.topItemsShowdownId().isEmpty()) {
             String premier = ShowdownIdMapper.objet(smogon.topItemsShowdownId().get(0));
             if ("Évoluroc".equals(premier) && objetPossible(espece, premier)) return premier;
