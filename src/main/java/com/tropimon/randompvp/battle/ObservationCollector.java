@@ -1667,6 +1667,10 @@ public final class ObservationCollector {
 
     private static void suivreCoupDonne(String cle, Object[] args) {
         noterEffetPv(cle, args);
+        try {
+            suivreRestes(cle, args);
+        } catch (Exception ignored) {
+        }
         suivreUnCoupDonne(coupDonne, cle, args);
         suivreUnCoupDonne(coupPrescience, cle, args);
     }
@@ -1767,6 +1771,82 @@ public final class ObservationCollector {
         // heal.drain nomme le Pokémon VIDÉ : c'est l'autre camp qui se soigne
         boolean surAdv = cle.equals("cobblemon.battle.heal.drain") ? !adverse : adverse;
         (surAdv ? SUIVI_PV_ADV : SUIVI_PV_MOI).dernierEffetMs = System.currentTimeMillis();
+    }
+
+    // --- Pas de Restes : blessé avant la fin du tour, aucun soin ---
+    // Les Restes (et la Boue Noire d'un Poison) soignent à la fin de chaque
+    // tour dès qu'il lui manque des PV. S'il était blessé avant cette phase et
+    // qu'aucun soin n'est annoncé, il ne les a pas. Sans ça, « Restes
+    // (estimé) » restait affiché tout le combat (très courant en random).
+    private static long debutTourMs = 0;
+    private static long residuelMs = 0;
+    private static String especeAuResiduel = null;
+    private static final Set<String> SOIGNES_CE_TOUR = new HashSet<>();
+
+    private static boolean estMessageResiduel(String cle) {
+        return cle.startsWith("cobblemon.battle.weather.") && (cle.endsWith(".upkeep") || cle.endsWith(".end"))
+            || cle.equals("cobblemon.battle.heal.leftovers") || cle.equals("cobblemon.battle.heal.blacksludge")
+            || cle.equals("cobblemon.battle.heal.grassyterrain")
+            || (cle.startsWith("cobblemon.status.") && cle.endsWith(".hurt"))
+            || cle.startsWith("cobblemon.battle.fieldend.") || cle.startsWith("cobblemon.battle.end.futuresight")
+            || cle.equals("cobblemon.battle.damage.leechseed") || cle.equals("cobblemon.battle.damage.saltcure");
+    }
+
+    private static void suivreRestes(String cle, Object[] args) {
+        if (cle.equals("cobblemon.battle.turn")) {
+            verifierRestesDuTour();
+            debutTourMs = System.currentTimeMillis();
+            residuelMs = 0;
+            especeAuResiduel = null;
+            SOIGNES_CE_TOUR.clear();
+            return;
+        }
+        if (cle.startsWith("cobblemon.battle.heal.") && args.length > 0
+                && Boolean.TRUE.equals(determinerAttaquant(MoveUseTracker.extraireProprietaire(args[0])))) {
+            String e = especeOuActif(args[0]);
+            if (e != null) SOIGNES_CE_TOUR.add(e);
+        }
+        if (residuelMs == 0 && estMessageResiduel(cle)) {
+            residuelMs = System.currentTimeMillis();
+            Pokemon adv = BattleStateTracker.getAdversaireActif();
+            especeAuResiduel = adv != null ? adv.getEspece() : null;
+        }
+    }
+
+    private static void verifierRestesDuTour() {
+        if (debutTourMs == 0 || combatSauvageDetecte) return;
+        long finMs = residuelMs != 0 ? residuelMs : System.currentTimeMillis();
+        String espece = especeAuResiduel;
+        if (espece == null) {
+            Pokemon adv = BattleStateTracker.getAdversaireActif();
+            espece = adv != null ? adv.getEspece() : null;
+        }
+        if (espece == null) return;
+        for (String e : SOIGNES_CE_TOUR) if (memeEspece(e, espece)) return;
+        if (OBJETS_CONFIRMES.containsKey(espece) || OBJETS_RETIRES.contains(espece)) return;
+        if (objetExclu(espece, "Restes")) return;
+        // PV en vigueur pendant le tour, jusqu'à ~1 s après le premier message
+        // de fin de tour (le jeu applique les PV avec ce retard)
+        double enVigueur = Double.NaN;
+        boolean blesse = false;
+        for (PvStable p : SUIVI_PV_ADV.histo) {
+            if (!memeEspece(p.espece, espece)) continue;
+            if (p.t <= debutTourMs) {
+                enVigueur = p.v;
+                continue;
+            }
+            if (p.t > finMs + 800) break;
+            if (p.v > 0.05 && p.v < 99.5) blesse = true;
+        }
+        if (!Double.isNaN(enVigueur) && enVigueur > 0.05 && enVigueur < 99.5) blesse = true;
+        if (!blesse) return;
+        Pokemon adv = BattleStateTracker.getAdversaireActif();
+        if (adv == null || !memeEspece(adv.getEspece(), espece) || adv.getPvActuels() <= 0) return;
+        OBJETS_EXCLUS.computeIfAbsent(espece, k -> new HashSet<>()).add("Restes");
+        OBJETS_EXCLUS.computeIfAbsent(espece, k -> new HashSet<>()).add("Boue Noire");
+        OBJETS_PROBABLES.remove(espece, "Restes");
+        OBJETS_PROBABLES.remove(espece, "Boue Noire");
+        MessageDebugLogger.analyse("OBJET " + espece + " : pas de Restes (blessé, aucun soin en fin de tour)");
     }
 
     /** Remplit l'état « PV au moment du coup » d'une mesure qui commence. */
@@ -2526,8 +2606,14 @@ public final class ObservationCollector {
         Map.entry(PokemonType.FEE, "pixieplate"));
 
     /** Seuil côté objets : 1.2 par défaut, 1.0 si Smogon rend les x1.2 invraisemblables. */
+    private static final boolean RANDOM_SANS_OBJET_X12 = true;
+
     private static double seuilObjets(String espece, com.tropimon.randompvp.calc.Move capacite,
                                       boolean physique, Pokemon defenseur) {
+        // Random Tropimon : aucun objet x1,2 (objet du type, plaque, Ceinture
+        // Pro) vu sur 88 Pokémon de tes équipes ni chez les adversaires. Tout
+        // dépassement du maximum sans objet désigne donc un objet Choix.
+        if (RANDOM_SANS_OBJET_X12) return 1.0;
         double choix = SmogonDataLoader.fractionObjet(espece, physique ? "choiceband" : "choicespecs");
         if (choix < 0.10) return 1.2;   // espèce inconnue (-1) ou Choix rare : prudence
         PokemonType type = capacite.getType();
@@ -3598,16 +3684,33 @@ public final class ObservationCollector {
     }
 
     /** Objet le plus joué sur Smogon, hors Ballon quand le jeu ne l'a pas annoncé. */
+    // Random Tropimon : les objets viennent d'un pool commun, presque sans lien
+    // avec l'espèce. Sur 88 Pokémon de tes équipes random, seuls 49 % avaient
+    // un objet prévu par les sets random de Showdown, et les objets Smogon
+    // (Ceinture Focus, Roche Humide, Mouchoir Soie...) n'apparaissent jamais.
+    // Fréquences observées : Restes 23 %, Orbe Vie 16 %, Grosses Bottes 15 %,
+    // Mouchoir Choix 10 %, Lunettes Choix 9 %, Veste de Combat 7 %, Casque
+    // Brut 5 %, Évoluroc 3 % (Pokémon non évolués). On suppose donc Restes
+    // (sans effet sur les dégâts), puis Orbe Vie (pire cas pour mes PV) une
+    // fois les Restes exclus, puis Grosses Bottes.
+    private static final String[] ORDRE_OBJETS_RANDOM = {"Restes", "Orbe Vie", "Grosses Bottes"};
+
+    private static boolean objetPossible(String espece, String fr) {
+        if (fr == null) return false;
+        if ("Ballon".equals(fr) && ballonExclu(espece)) return false;
+        if (fr.endsWith(" Choix") && OBJETS_CHOIX_EXCLUS.contains(espece)) return false;
+        if ("Orbe Vie".equals(fr) && ORBE_VIE_EXCLUE.contains(espece)) return false;
+        return !objetExclu(espece, fr);
+    }
+
     private static String objetSmogonProbable(String espece, SmogonDataLoader.SmogonPokemonData smogon) {
-        if (smogon == null) return null;
-        for (String id : smogon.topItemsShowdownId()) {
-            String fr = ShowdownIdMapper.objet(id);
-            if (fr == null) continue;
-            if ("Ballon".equals(fr) && ballonExclu(espece)) continue;
-            if (fr.endsWith(" Choix") && OBJETS_CHOIX_EXCLUS.contains(espece)) continue;
-            if ("Orbe Vie".equals(fr) && ORBE_VIE_EXCLUE.contains(espece)) continue;
-            if (objetExclu(espece, fr)) continue;
-            return fr;
+        // Évoluroc : seul objet que Smogon prédit bien (Pokémon non évolués)
+        if (smogon != null && !smogon.topItemsShowdownId().isEmpty()) {
+            String premier = ShowdownIdMapper.objet(smogon.topItemsShowdownId().get(0));
+            if ("Évoluroc".equals(premier) && objetPossible(espece, premier)) return premier;
+        }
+        for (String fr : ORDRE_OBJETS_RANDOM) {
+            if (objetPossible(espece, fr)) return fr;
         }
         return null;
     }
@@ -4459,6 +4562,10 @@ public final class ObservationCollector {
         dernierePhotoPv = null;
         SUIVI_PV_ADV.vider();
         SUIVI_PV_MOI.vider();
+        debutTourMs = 0;
+        residuelMs = 0;
+        especeAuResiduel = null;
+        SOIGNES_CE_TOUR.clear();
         photoPvEnCours = null;
         meteoType = null;
         meteoLanceurAdv = null;
