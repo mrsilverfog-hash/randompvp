@@ -326,8 +326,47 @@ public final class SmogonDataLoader {
         "kingambit", List.of("suckerpunch", "kowtowcleave", "ironhead", "uturn")
     );
 
+    // Attaques des sets random de Showdown (gen 9, à défaut 8 puis 7), triées
+    // par fréquence. En random Tropimon, 67 % des attaques vues dans tes logs
+    // y figurent : bien plus proche que les sets Smogon OU.
+    private static volatile Map<String, List<String>> CAPACITES_RANDOM = null;
+
+    private static Map<String, List<String>> capacitesRandom() {
+        Map<String, List<String>> m = CAPACITES_RANDOM;
+        if (m != null) return m;
+        Map<String, List<String>> lu = new HashMap<>();
+        try (java.io.InputStream in = SmogonDataLoader.class.getResourceAsStream("/assets/randompvp/randbats-capacites.json")) {
+            if (in != null) {
+                JsonObject racine = JsonParser.parseReader(new java.io.InputStreamReader(in,
+                    java.nio.charset.StandardCharsets.UTF_8)).getAsJsonObject();
+                for (Map.Entry<String, JsonElement> e : racine.entrySet()) {
+                    List<String> l = new ArrayList<>();
+                    for (JsonElement c : e.getValue().getAsJsonArray()) l.add(c.getAsString());
+                    lu.put(e.getKey(), l);
+                }
+            }
+        } catch (Exception ex) {
+            RandomPvpClient.LOGGER.warn("[RandomPvp] Attaques random illisibles : {}", ex.getMessage());
+        }
+        CAPACITES_RANDOM = lu;
+        return lu;
+    }
+
     public static SmogonPokemonData getDonnees(String especeShowdownId) {
         String id = normaliser(especeShowdownId);
+        SmogonPokemonData base = getDonneesSmogon(id);
+        List<String> random = capacitesRandom().get(id);
+        if (random == null || random.isEmpty()) return base;
+        List<String> moves = new ArrayList<>(random);
+        if (base != null) {
+            for (String m : base.topMovesShowdownId()) if (!moves.contains(m)) moves.add(m);
+            return new SmogonPokemonData(base.topItemsShowdownId(), base.topAbilitiesShowdownId(),
+                base.topSpreads(), moves, base.topItemUsageFraction());
+        }
+        return new SmogonPokemonData(List.of(), List.of(), List.of(), moves, 0.0);
+    }
+
+    private static SmogonPokemonData getDonneesSmogon(String id) {
         SmogonPokemonData base = null;
         if (charge) base = DONNEES.get(id);
         if (base == null && chargeUbers) base = DONNEES_UBERS.get(id);

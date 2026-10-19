@@ -878,24 +878,22 @@ public final class CalcOverlay implements HudRenderCallback {
                                                com.tropimon.randompvp.calc.Move capacite, Field field,
                                                String espece, SmogonDataLoader.SmogonPokemonData smogon,
                                                boolean estPhysique) {
-        if (smogon == null || smogon.topItemsShowdownId().isEmpty()) return null;
-        if (smogon.topItemUsageFraction() < 0.5) return null;
+        // Random Tropimon : l'objet ne dépend presque pas de l'espèce, Smogon ne
+        // sert à rien ici. Sur tes équipes random, ~1 Pokémon sur 5 tient un
+        // objet Choix (Lunettes et Mouchoir surtout, Bandeau très rare) et
+        // 16 % une Orbe Vie. Pire cas affiché : Lunettes Choix pour une
+        // attaque spéciale, sinon Orbe Vie, tant qu'ils ne sont pas exclus.
         if (ObservationCollector.estObjetConfirme(espece)) return null;   // déjà un fait connu
-
-        String objetProbable = com.tropimon.randompvp.calc.ShowdownIdMapper.objet(smogon.topItemsShowdownId().get(0));
+        String objetProbable = null;
+        if (!estPhysique && !ObservationCollector.estChoixExclu(espece)) objetProbable = "Lunettes Choix";
+        else if (!ObservationCollector.estOrbeVieExclue(espece)) objetProbable = "Orbe Vie";
         if (objetProbable == null) return null;
-        boolean estOrbeVie = "Orbe Vie".equals(objetProbable);
-        boolean estBandeau = "Bandeau Choix".equals(objetProbable);
-        boolean estLunettes = "Lunettes Choix".equals(objetProbable);
-        if (!estOrbeVie && !estBandeau && !estLunettes) return null;
-        if (estBandeau && !estPhysique) return null;
-        if (estLunettes && estPhysique) return null;
-        // Objet déjà écarté par un fait : plus de pire cas à prévoir
-        if ((estBandeau || estLunettes) && ObservationCollector.estChoixExclu(espece)) return null;
-        if (estOrbeVie && ObservationCollector.estOrbeVieExclue(espece)) return null;
-
-        // Déjà l'objet actif : le range normal l'inclut déjà, pas la peine de redire
-        if (objetProbable.equals(adversaire.getObjet())) return null;
+        // Déjà l'objet actif : le range normal l'inclut déjà
+        if (objetProbable.equals(adversaire.getObjet())) {
+            if (!"Lunettes Choix".equals(objetProbable) || ObservationCollector.estOrbeVieExclue(espece)) return null;
+            objetProbable = "Orbe Vie";
+            if (objetProbable.equals(adversaire.getObjet())) return null;
+        }
 
         String objetOriginal = adversaire.getObjet();
         adversaire.setObjet(objetProbable);
