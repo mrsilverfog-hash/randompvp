@@ -541,7 +541,9 @@ public interface AbilityModifier {
                 // grand des deux comptes (équipe complète, messages).
                 try {
                     int koCount;
-                    if (ctx.attaquant.isCampAdverse()) {
+                    if (ctx.attaquant.getAlliesKo() >= 0) {
+                        koCount = ctx.attaquant.getAlliesKo();
+                    } else if (ctx.attaquant.isCampAdverse()) {
                         koCount = com.tropimon.randompvp.battle.ObservationCollector.getNombreKoAdversaire();
                     } else {
                         koCount = com.tropimon.randompvp.battle.ObservationCollector.getNombreKoJoueur();
