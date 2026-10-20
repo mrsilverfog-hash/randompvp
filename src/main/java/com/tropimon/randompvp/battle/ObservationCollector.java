@@ -3678,6 +3678,10 @@ public final class ObservationCollector {
             suivrePvMetamorph();
         } catch (Exception ignored) {
         }
+        try {
+            PvEquipe.tick();
+        } catch (Throwable ignored) {
+        }
 
         // Capacités copiées par mon Métamorph : lues dans le menu d'attaque
         // dès qu'il est disponible, gardées tant qu'il reste transformé.
@@ -4884,6 +4888,7 @@ public final class ObservationCollector {
         OBJETS_EXCLUS.clear();
         PREUVES_EXCLUSION.clear();
         PV_METAMORPH.clear();
+        PvEquipe.vider();
         TALENTS_PROBABLES.clear();
         PLAFONDS_DEFENSIFS.clear();
         PLANCHERS_DEFENSIFS.clear();
