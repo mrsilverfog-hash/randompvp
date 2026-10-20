@@ -879,21 +879,21 @@ public final class CalcOverlay implements HudRenderCallback {
                                                String espece, SmogonDataLoader.SmogonPokemonData smogon,
                                                boolean estPhysique) {
         // Random Tropimon : l'objet ne dépend presque pas de l'espèce, Smogon ne
-        // sert à rien ici. Sur tes équipes random, ~1 Pokémon sur 5 tient un
-        // objet Choix (Lunettes et Mouchoir surtout, Bandeau très rare) et
-        // 16 % une Orbe Vie. Pire cas affiché : Lunettes Choix pour une
-        // attaque spéciale, sinon Orbe Vie, tant qu'ils ne sont pas exclus.
+        // sert à rien ici. ~1 Pokémon sur 5 tient un objet Choix et 16 % une
+        // Orbe Vie. Pire cas affiché : l'objet Choix de la catégorie du coup
+        // (Bandeau Choix pour une attaque physique, Lunettes Choix pour une
+        // spéciale), sinon Orbe Vie, tant qu'ils ne sont pas exclus.
+        // Le Bandeau n'était jamais proposé (jugé trop rare) alors que tes
+        // logs random en confirment régulièrement.
         if (ObservationCollector.estObjetConfirme(espece)) return null;   // déjà un fait connu
+        String choix = estPhysique ? "Bandeau Choix" : "Lunettes Choix";
         String objetProbable = null;
-        if (!estPhysique && !ObservationCollector.estChoixExclu(espece)) objetProbable = "Lunettes Choix";
-        else if (!ObservationCollector.estOrbeVieExclue(espece)) objetProbable = "Orbe Vie";
-        if (objetProbable == null) return null;
-        // Déjà l'objet actif : le range normal l'inclut déjà
-        if (objetProbable.equals(adversaire.getObjet())) {
-            if (!"Lunettes Choix".equals(objetProbable) || ObservationCollector.estOrbeVieExclue(espece)) return null;
+        if (!ObservationCollector.estChoixExclu(espece) && !choix.equals(adversaire.getObjet())) {
+            objetProbable = choix;
+        } else if (!ObservationCollector.estOrbeVieExclue(espece) && !"Orbe Vie".equals(adversaire.getObjet())) {
             objetProbable = "Orbe Vie";
-            if (objetProbable.equals(adversaire.getObjet())) return null;
         }
+        if (objetProbable == null) return null;
 
         String objetOriginal = adversaire.getObjet();
         adversaire.setObjet(objetProbable);
