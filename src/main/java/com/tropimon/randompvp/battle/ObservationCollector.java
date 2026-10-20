@@ -2041,6 +2041,10 @@ public final class ObservationCollector {
                         .append(physique ? ", mon Atq " : ", mon AtqSpé ")
                         .append(cd.attaquant.getStatCalculee(physique ? Stat.ATTAQUE : Stat.ATTAQUE_SPE)).append(']');
                     boolean coupsFixes = !cd.multiCoups || DamageCalculator.nombreDeCoupsFixe(capacite, cd.attaquant);
+                    if (coupsFixes && (cd.impactPrescience || !PUISSANCE_NON_MODELISEE.contains(cd.idCoup))) {
+                        noterBilan("donné " + cd.especeAttaquant + " " + cd.idCoup + (cd.impactPrescience ? " (impact)" : "")
+                            + " -> " + cd.especeDefenseur + (cd.crit ? " critique" : ""), perte, r, cd.ko);
+                    }
                     if (!r.immunise && !cd.ko && coupsFixes) {
                         if (perte > r.pourcentageMax + 2) log.append(" | PLUS que prévu");
                         else if (perte < r.pourcentageMin - 2) log.append(" | MOINS que prévu");
@@ -2227,6 +2231,38 @@ public final class ObservationCollector {
             .append(statDef == Stat.DEFENSE ? "PV x Déf" : "PV x DéfSpé")
             .append(plus ? " au plus x" : " au moins x").append(String.format(java.util.Locale.ROOT, "%.2f", facteur))
             .append(net || mesures >= 2 ? ", appliqué" : ", à confirmer");
+        if (!plus) partagerPvEnPlus(cd, brut, capacite, perte, statDef, espece, log);
+    }
+
+    /**
+     * Plus résistant que prévu : si des EV en PV suffisent à l'expliquer (le
+     * set supposé en a moins de 252), ces PV comptent aussi contre l'autre
+     * catégorie d'attaque. On applique à l'autre défense la part due aux PV.
+     * Log du 13/10 : Dracolosse 25 % plus résistant au Pisto-Poing comme à la
+     * Prescience, sans que le mod relie les deux.
+     */
+    private static void partagerPvEnPlus(CoupDonne cd, Pokemon brut, com.tropimon.randompvp.calc.Move capacite,
+                                         double perte, Stat statDef, String espece, StringBuilder log) {
+        int evPv = brut.getEv(Stat.PV);
+        if (evPv >= 252) return;
+        int pvEstimes = brut.getPvMax();
+        for (int ev = evPv + 4; ev <= 252; ev += 4) {
+            Pokemon h = brut.copieAvecEvNature(Map.of(Stat.PV, ev), null);
+            for (Stat st : Stat.values()) if (st != Stat.PV) h.setStage(st, cd.defenseurEstime.getStage(st));
+            DamageCalculator.Resultat r = DamageCalculator.calculer(
+                cd.attaquant, h, capacite, cd.etat, cd.etat.getEcransAdversaire(), cd.crit);
+            if (r.immunise) return;
+            if (perte >= r.pourcentageMin - 1.0 && perte <= r.pourcentageMax + 1.0) {
+                double facteurPv = (double) h.getPvMax() / pvEstimes;
+                if (facteurPv < 1.03) return;
+                Stat autre = statDef == Stat.DEFENSE ? Stat.DEFENSE_SPE : Stat.DEFENSE;
+                PLANCHERS_DEFENSIFS.computeIfAbsent(espece, k -> new HashMap<>()).merge(autre, facteurPv, Math::max);
+                log.append(" | PV probablement plus hauts (").append(ev).append(" EV) : x")
+                    .append(String.format(java.util.Locale.ROOT, "%.2f", facteurPv))
+                    .append(autre == Stat.DEFENSE ? " aussi en Déf" : " aussi en DéfSpé");
+                return;
+            }
+        }
     }
 
     /**
@@ -2563,13 +2599,46 @@ public final class ObservationCollector {
             .append(" stage ").append(physique ? cr.stageAtk : cr.stageAtkSpe)
             .append(", météo ").append(cr.etat.getMeteo()).append(", champ ").append(cr.etat.getTerrain()).append(']');
 
+        if (!cr.crit && !cr.multiCoups && !capacite.isMultiCoups() && !PUISSANCE_NON_MODELISEE.contains(cr.idCoup)) {
+            noterBilan("reçu " + cr.especeAttaquant + " " + cr.idCoup + " -> " + cr.especeDefenseur, perte, prevu, cr.ko);
+        }
+
+        // --- Talent : un autre talent possible explique seul le coup ---
+        // (le set supposé prend le talent le plus joué ; Multiécaille, Peau
+        // Féérique, Adaptabilité... changent les dégâts du tout au tout)
+        boolean talentTrouve = false;
+        if (!cr.crit && !cr.ko && !cr.multiCoups && !capacite.isMultiCoups() && !prevu.immunise
+                && !PUISSANCE_NON_MODELISEE.contains(cr.idCoup) && !TALENTS_CONFIRMES.containsKey(cr.especeAttaquant)) {
+            double marge = Math.max(1.5, prevu.pourcentageMax * 0.05);
+            if (perte > prevu.pourcentageMax + marge || perte < prevu.pourcentageMin - marge) {
+                List<String> explications = new ArrayList<>();
+                for (String id : talentsBrutsPossibles(cr.attaquant)) {
+                    String fr = ShowdownIdMapper.talent(id);
+                    if (fr == null || fr.equals(estime.getTalent())) continue;
+                    Pokemon h = estime.copieAvec(Map.of(), null, fr);
+                    DamageCalculator.Resultat r = DamageCalculator.calculer(
+                        h, cr.defenseur, capacite, cr.etat, cr.etat.getEcransJoueur(), false);
+                    if (!r.immunise && perte >= r.pourcentageMin - 1.0 && perte <= r.pourcentageMax + 1.0) explications.add(fr);
+                }
+                if (explications.size() == 1) {
+                    String esp = cr.especeAttaquant;
+                    if (!explications.get(0).equals(TALENTS_PROBABLES.put(esp, explications.get(0)))) {
+                        MessageDebugLogger.analyse("TALENT " + esp + " : " + explications.get(0)
+                            + " probable (seul talent qui explique ses dégâts)");
+                    }
+                    log.append(" | talent ").append(explications.get(0)).append(" probable (explique seul le coup)");
+                    talentTrouve = true;
+                }
+            }
+        }
+
         // Pas de "set moins offensif" en random battle : les EV (85) et la
         // nature (neutre) sont connus, un coup plus faible que prévu vient de
         // l'objet ou du talent, pas d'un autre réglage de stats. Si le même
         // calcul SANS l'objet supposé (Orbe Vie, Choix...) colle, cet objet
         // est faux : il est exclu et l'estimation passe au suivant.
         String objetEstime = estime.getObjet();
-        if (!cr.crit && !cr.ko && !cr.multiCoups && !capacite.isMultiCoups() && !prevu.immunise
+        if (!talentTrouve && !cr.crit && !cr.ko && !cr.multiCoups && !capacite.isMultiCoups() && !prevu.immunise
                 && objetEstime != null && !OBJETS_CONFIRMES.containsKey(cr.especeAttaquant)
                 && !PUISSANCE_NON_MODELISEE.contains(cr.idCoup)
                 && perte < prevu.pourcentageMin - Math.max(1.5, prevu.pourcentageMin * 0.05)) {
@@ -3506,6 +3575,62 @@ public final class ObservationCollector {
     private static Object combatSuivi = null;
 
     /** Remet tout à zéro si le combat en cours n'est plus celui qu'on suivait. */
+    // --- Apprentissage du générateur random (voir StatsRandom) ---
+    // Ta propre équipe est notée au début du combat (échantillon sans biais :
+    // objets et attaques tels que le serveur les a tirés), les adversaires à
+    // la fin (attaques vues, objet connu).
+    private static final List<Object[]> EQUIPE_A_ENREGISTRER = new ArrayList<>();
+    private static boolean equipeNotee = false;
+
+    private static void noterEquipeRandom() {
+        if (equipeNotee) return;
+        List<com.cobblemon.mod.common.pokemon.Pokemon> equipe = BattleStateTracker.getEquipeJoueur();
+        if (equipe == null || equipe.isEmpty()) return;
+        equipeNotee = true;
+        for (com.cobblemon.mod.common.pokemon.Pokemon p : equipe) {
+            try {
+                List<String> moves = new ArrayList<>();
+                for (com.cobblemon.mod.common.api.moves.Move m : p.getMoveSet()) {
+                    if (m != null) moves.add(m.getName());
+                }
+                String objet = null;
+                if (!p.heldItem().isEmpty()) {
+                    var id = net.minecraft.registry.Registries.ITEM.getId(p.heldItem().getItem());
+                    if (id != null) objet = ShowdownIdMapper.objet(id.getPath());
+                }
+                EQUIPE_A_ENREGISTRER.add(new Object[]{p.getSpecies().showdownId(), moves, objet});
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
+    private static void enregistrerStatsRandom() {
+        boolean quelqueChose = false;
+        if (!combatSauvageDetecte) {
+            for (Object[] e : EQUIPE_A_ENREGISTRER) {
+                @SuppressWarnings("unchecked") List<String> moves = (List<String>) e[1];
+                StatsRandom.enregistrer((String) e[0], moves, (String) e[2]);
+                quelqueChose = true;
+            }
+            Set<String> especes = new HashSet<>(COUPS_ADVERSAIRE.keySet());
+            especes.addAll(OBJETS_CONFIRMES.keySet());
+            especes.addAll(OBJETS_PERDUS_CONNUS.keySet());
+            for (String esp : especes) {
+                String objet = OBJETS_PERDUS_CONNUS.get(esp);
+                if (objet == null) {
+                    String raison = RAISONS_OBJET.get(esp);
+                    boolean recuOuDeduit = raison != null && (raison.contains("reçu") || raison.contains("pré-évolution"));
+                    if (!recuOuDeduit) objet = OBJETS_CONFIRMES.get(esp);
+                }
+                StatsRandom.enregistrer(esp, COUPS_ADVERSAIRE.getOrDefault(esp, new LinkedHashSet<>()), objet);
+                quelqueChose = true;
+            }
+        }
+        EQUIPE_A_ENREGISTRER.clear();
+        equipeNotee = false;
+        if (quelqueChose) StatsRandom.sauvegarder();
+    }
+
     public static void verifierChangementDeCombat() {
         Object combat;
         try {
@@ -3532,6 +3657,10 @@ public final class ObservationCollector {
         }
         verifierChangementDeCombat();
         etatVide = false;
+        try {
+            noterEquipeRandom();
+        } catch (Exception ignored) {
+        }
         if (finDeTourEnAttenteMs != 0 && System.currentTimeMillis() - finDeTourEnAttenteMs >= DELAI_PV_MS) {
             viderFinDeTourEnAttente();
         }
@@ -3843,6 +3972,22 @@ public final class ObservationCollector {
         if (smogon != null && !smogon.topItemsShowdownId().isEmpty()) {
             String premier = ShowdownIdMapper.objet(smogon.topItemsShowdownId().get(0));
             if ("Évoluroc".equals(premier) && objetPossible(espece, premier)) return premier;
+        }
+        // Objets déjà vus pour cette espèce dans tes combats random : le plus
+        // fréquent encore possible (dès 2 observations)
+        Map<String, Integer> vus = StatsRandom.objets(espece);
+        int total = 0;
+        for (int n : vus.values()) total += n;
+        if (total >= 2) {
+            String meilleur = null;
+            int max = 0;
+            for (Map.Entry<String, Integer> e : vus.entrySet()) {
+                if (e.getValue() > max && objetPossible(espece, e.getKey())) {
+                    meilleur = e.getKey();
+                    max = e.getValue();
+                }
+            }
+            if (meilleur != null) return meilleur;
         }
         for (String fr : ORDRE_OBJETS_RANDOM) {
             if (objetPossible(espece, fr)) return fr;
@@ -4625,7 +4770,54 @@ public final class ObservationCollector {
         return lanceurPrescienceAdvBase == null ? null : construireAdversaireEstime(lanceurPrescienceAdvBase);
     }
 
+    // --- Bilan de précision du combat (écrit dans le journal à la fin) ---
+    // Chaque coup mesuré : dans la fourchette prévue ou non. Sert à voir où le
+    // mod se trompe encore et si une correction améliore vraiment les choses.
+    private static final class MesureBilan {
+        final String quoi; final double perte, min, max; final boolean ko;
+        MesureBilan(String quoi, double perte, double min, double max, boolean ko) {
+            this.quoi = quoi; this.perte = perte; this.min = min; this.max = max; this.ko = ko;
+        }
+        boolean dedans() {
+            // K.O. : la perte n'est qu'une borne basse, le prévu doit l'atteindre
+            return ko ? max >= perte - 1.5 : perte >= min - 1.5 && perte <= max + 1.5;
+        }
+    }
+    private static final List<MesureBilan> BILAN = new ArrayList<>();
+
+    private static void noterBilan(String quoi, double perte, DamageCalculator.Resultat r, boolean ko) {
+        if (r == null || r.immunise || Double.isNaN(perte)) return;
+        BILAN.add(new MesureBilan(quoi, perte, r.pourcentageMin, r.pourcentageMax, ko));
+    }
+
+    private static void ecrireBilan() {
+        if (BILAN.isEmpty()) return;
+        int dedans = 0;
+        List<String> ecarts = new ArrayList<>();
+        for (MesureBilan m : BILAN) {
+            if (m.dedans()) {
+                dedans++;
+            } else {
+                ecarts.add(m.quoi + " : " + pct(m.perte) + (m.ko ? " K.O." : "") + " pour " + pct(m.min) + " - " + pct(m.max)
+                    + (m.perte > m.max ? " (plus)" : " (moins)"));
+            }
+        }
+        MessageDebugLogger.analyse(String.format(java.util.Locale.ROOT,
+            "BILAN DU COMBAT : %d/%d coups dans la fourchette prévue (%.0f %%)", dedans, BILAN.size(),
+            100.0 * dedans / BILAN.size()));
+        for (String e : ecarts) MessageDebugLogger.analyse("BILAN écart : " + e);
+        BILAN.clear();
+    }
+
     public static void reinitialiser() {
+        try {
+            ecrireBilan();
+        } catch (Exception ignored) {
+        }
+        try {
+            enregistrerStatsRandom();
+        } catch (Exception ignored) {
+        }
         lanceurPrescienceJoueur = null;
         lanceurPrescienceAdvBase = null;
         MessageDebugLogger.analyse("=============== NOUVEAU COMBAT ===============");

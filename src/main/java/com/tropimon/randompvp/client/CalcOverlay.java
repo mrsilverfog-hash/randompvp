@@ -987,6 +987,8 @@ public final class CalcOverlay implements HudRenderCallback {
     static List<String> capacitesProbables(String espece) {
         LinkedHashSet<String> ids = new LinkedHashSet<>();
         for (MoveTemplate t : ObservationCollector.getCoupsAdversaireReveles(espece)) ids.add(t.getName());
+        // Attaques déjà vues pour cette espèce dans tes combats random
+        ids.addAll(com.tropimon.randompvp.battle.StatsRandom.capacites(espece));
         SmogonDataLoader.SmogonPokemonData smogon = SmogonDataLoader.getDonnees(espece);
         if (smogon != null) ids.addAll(smogon.topMovesShowdownId());
         List<String> r = new ArrayList<>(ids);
