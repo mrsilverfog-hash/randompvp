@@ -1055,6 +1055,7 @@ public final class ObservationCollector {
         long instantMs;
         boolean pvStableAuCoup, pvAvantDouteux;
         boolean morphing;           // un des deux transformé AU MOMENT du coup
+        boolean torche, charge;     // Torche activée / Chargeur en place au moment du coup
     }
     private static CoupRecu coupRecu = null;
 
@@ -2379,6 +2380,8 @@ public final class ObservationCollector {
         CoupRecu cr = new CoupRecu();
         cr.idCoup = idCoup;
         cr.morphing = joueurTransforme() || estTransforme(true, attaquant.getEspece());
+        cr.torche = TORCHE_ACTIVE.contains("adv:" + attaquant.getEspece());
+        cr.charge = chargeAdversaire;
         cr.especeAttaquant = attaquant.getEspece();
         cr.attaquant = attaquant;
         // Estimation AU MOMENT du coup : Dégommage lance l'objet puis le perd
@@ -2714,7 +2717,7 @@ public final class ObservationCollector {
 
         // Talents absents du calcul : abstention ou seuil relevé.
         Set<String> bruts = talentsBrutsPossibles(cr.attaquant);
-        if (seuilAutreQueChoix(bruts, capacite, physique, cr.pvAttaquantPct) < 0) {
+        if (seuilAutreQueChoix(bruts, capacite, physique, cr.pvAttaquantPct, cr.torche, cr.charge) < 0) {
             return log.append(" | talent possible indiscernable d'un Choix ").append(bruts).toString();
         }
         // Les x1.2 (objet du type de l'attaque, Ceinture Pro si super efficace)
@@ -2839,13 +2842,22 @@ public final class ObservationCollector {
     }
 
     private static double seuilAutreQueChoix(Set<String> bruts, com.tropimon.randompvp.calc.Move capacite,
-                                              boolean physique, double pvAttaquantPct) {
+                                              boolean physique, double pvAttaquantPct,
+                                              boolean torcheAuCoup, boolean chargeAuCoup) {
         // Seuls restent ici les talents x1.5 que le calcul NE modélise PAS
         // (Torche activée, Électrogenèse, Énergie Éolienne) : indiscernables
         // d'un Choix. Entêtement, Force Soleil, Méga Blaster, Expert/Boost Acier,
         // Engrais & co, les Peau ... et Hydrata-Son sont désormais calculés,
         // donc inclus dans le maximum sans objet.
-        if (bruts.contains("flashfire") || bruts.contains("electromorphosis") || bruts.contains("windpower")) return -1;
+        // Seulement quand l'effet est réellement en place : Torche activée et
+        // capacité Feu, Chargeur (Électrogenèse / Énergie Éolienne, annoncé par
+        // le jeu) et capacité Électrik. Sinon ces talents ne changent rien :
+        // Fulgulairo s'abstenait à chaque Tonnerre (Lunettes Choix vues
+        // seulement par élimination, logs du 22/10).
+        PokemonType type = capacite.getType();
+        if (bruts.contains("flashfire") && type == PokemonType.FEU && torcheAuCoup) return -1;
+        if ((bruts.contains("electromorphosis") || bruts.contains("windpower"))
+                && type == PokemonType.ELECTRIK && chargeAuCoup) return -1;
         return 1.0;
     }
 
@@ -4145,6 +4157,28 @@ public final class ObservationCollector {
         }
     }
 
+    // --- Chargeur adverse (Électrogenèse, Énergie Éolienne, Chargeur) ---
+    // Annoncé par le jeu (start.charge), consommé par sa prochaine capacité
+    // Électrik, perdu quand il sort.
+    private static boolean chargeAdversaire = false;
+
+    private static void suivreCharge(String cle, Object[] args) {
+        if (cle.startsWith("cobblemon.battle.switch.other") || cle.startsWith("cobblemon.battle.withdraw.other")
+                || cle.startsWith("cobblemon.battle.dragged_out")) {
+            chargeAdversaire = false;
+        } else if (cle.equals("cobblemon.battle.start.charge") && args.length > 0) {
+            if (Boolean.TRUE.equals(determinerAttaquant(MoveUseTracker.extraireProprietaire(args[0])))) chargeAdversaire = true;
+        } else if ((cle.equals("cobblemon.battle.used_move_on") || cle.equals("cobblemon.battle.used_move"))
+                && args.length > 1 && chargeAdversaire
+                && Boolean.TRUE.equals(determinerAttaquant(MoveUseTracker.extraireProprietaire(args[0])))) {
+            try {
+                MoveTemplate t = Moves.INSTANCE.getByName(idCapaciteDepuisArgument(args[1]));
+                if (t != null && "electric".equalsIgnoreCase(t.getElementalType().getName())) chargeAdversaire = false;
+            } catch (Exception ignored) {
+            }
+        }
+    }
+
     public static boolean departLentActif(boolean adverse, String espece) {
         return espece != null && DEPART_LENT.contains((adverse ? "adv:" : "moi:") + espece);
     }
@@ -4181,6 +4215,7 @@ public final class ObservationCollector {
         suivreDureeMeteo(cle, contenu.getArgs());
         suivreMorphingEtRates(cle, contenu.getArgs());
         suivreDepartLent(cle, contenu.getArgs());
+        suivreCharge(cle, contenu.getArgs());
         suivreDelestage(cle, contenu.getArgs());
 
         if (cle.contains("quickclaw") || cle.contains("quickdraw") || cle.contains("custap")) {
@@ -5078,6 +5113,7 @@ public final class ObservationCollector {
         PvEquipe.vider();
         BattleStateTracker.oublierFormes();
         DEPART_LENT.clear();
+        chargeAdversaire = false;
         TALENTS_PROBABLES.clear();
         PLAFONDS_DEFENSIFS.clear();
         PLANCHERS_DEFENSIFS.clear();
