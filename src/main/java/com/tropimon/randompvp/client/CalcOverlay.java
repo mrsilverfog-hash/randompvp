@@ -417,7 +417,8 @@ public final class CalcOverlay implements HudRenderCallback {
         for (MoveTemplate t : coupsReveles) reveleIds.add(t.getName());
 
         List<MoveTemplate> aAfficher = new ArrayList<>(coupsReveles);
-        if (smogon != null) {
+        // Jeu complet copié par mon Métamorph : rien à supposer
+        if (smogon != null && !ObservationCollector.coupsAdversaireComplets(especeAdv)) {
             for (String moveId : smogon.topMovesShowdownId()) {
                 if (!reveleIds.contains(moveId)) {
                     MoveTemplate t = Moves.INSTANCE.getByName(moveId);
@@ -987,6 +988,7 @@ public final class CalcOverlay implements HudRenderCallback {
     static List<String> capacitesProbables(String espece) {
         LinkedHashSet<String> ids = new LinkedHashSet<>();
         for (MoveTemplate t : ObservationCollector.getCoupsAdversaireReveles(espece)) ids.add(t.getName());
+        if (ObservationCollector.coupsAdversaireComplets(espece)) return new ArrayList<>(ids);
         // Attaques déjà vues pour cette espèce dans tes combats random
         ids.addAll(com.tropimon.randompvp.battle.StatsRandom.capacites(espece));
         SmogonDataLoader.SmogonPokemonData smogon = SmogonDataLoader.getDonnees(espece);
