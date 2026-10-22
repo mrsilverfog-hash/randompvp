@@ -982,11 +982,11 @@ public final class ObservationCollector {
     private static Set<String> talentsBrutsPossibles(Pokemon adversaire) {
         Set<String> r = new HashSet<>();
         try {
-            Species espece = com.cobblemon.mod.common.api.pokemon.PokemonSpecies.INSTANCE.getByName(adversaire.getEspece());
-            if (espece == null) return r;
+            List<String> noms = BattleStateTracker.talentsPossibles(adversaire.getEspece());
+            if (noms == null) return r;
             String confirme = TALENTS_CONFIRMES.get(adversaire.getEspece());
-            for (var a : espece.getAbilities()) {
-                String id = a.getTemplate().getName().toLowerCase().replaceAll("[^a-z0-9]", "");
+            for (String nom : noms) {
+                String id = nom.toLowerCase().replaceAll("[^a-z0-9]", "");
                 if (confirme != null && !confirme.equals(ShowdownIdMapper.talent(id))) continue;
                 r.add(id);
             }
@@ -1054,6 +1054,7 @@ public final class ObservationCollector {
         double correctionPv = 0;    // PV rendus (+) ou perdus (-) après le coup
         long instantMs;
         boolean pvStableAuCoup, pvAvantDouteux;
+        boolean morphing;           // un des deux transformé AU MOMENT du coup
     }
     private static CoupRecu coupRecu = null;
 
@@ -1075,6 +1076,7 @@ public final class ObservationCollector {
         boolean pvStableAuCoup;     // sa barre de PV était immobile à ce moment
         long coupPrecedentMs;       // mon coup du même tour avant l'impact de Prescience
         boolean pvAvantDouteux;     // un effet sur ses PV venait d'arriver, pas encore appliqué
+        boolean morphing;           // un des deux transformé AU MOMENT du coup
     }
     private static CoupDonne coupDonne = null;
     private static CoupDonne coupPrescience = null;
@@ -1655,6 +1657,7 @@ public final class ObservationCollector {
             }
             CoupDonne cd = new CoupDonne();
             cd.idCoup = idCoup;
+            cd.morphing = joueurTransforme() || estTransforme(true, def.getEspece());
             cd.especeAttaquant = att.getEspece();
             cd.especeDefenseur = def.getEspece();
             cd.attaquant = att;
@@ -1992,6 +1995,8 @@ public final class ObservationCollector {
                 log.append("dégâts dans deux tours : pas de mesure");
             } else if (cd.bloque) {
                 log.append("coup bloqué (Abri, raté, sans effet ou échoué)");
+            } else if (cd.morphing) {
+                log.append("Morphing au moment du coup : pas de mesure");
             } else if (cd.clone && !cd.impactPrescience) {
                 log.append("touché sur son Clone");
             } else if (mesureParPvStables(cd) == null && cd.pvAvantDouteux) {
@@ -2346,6 +2351,7 @@ public final class ObservationCollector {
 
         CoupRecu cr = new CoupRecu();
         cr.idCoup = idCoup;
+        cr.morphing = joueurTransforme() || estTransforme(true, attaquant.getEspece());
         cr.especeAttaquant = attaquant.getEspece();
         cr.attaquant = attaquant;
         // Estimation AU MOMENT du coup : Dégommage lance l'objet puis le perd
@@ -2530,7 +2536,10 @@ public final class ObservationCollector {
             return "mesure invalide (effet sur mes PV juste avant le coup, pas encore appliqué)";
         }
         if (stables == null && cr.invalide) return "mesure invalide (soin, dégât annexe, switch ou capacité coûtant des PV après le coup)";
-        if (estTransforme(true, cr.especeAttaquant) || joueurTransforme()) {
+        // Morphing au moment du coup (analysé au tour suivant, Métamorph
+        // parfois déjà sorti : Pisto-Poing sur Métamorph-Cizayox comparé à
+        // un Métamorph normal, logs du 22/10)
+        if (cr.morphing || estTransforme(true, cr.especeAttaquant) || joueurTransforme()) {
             return "Morphing en cours : ignoré";
         }
         if (cr.clone) return "touché sur un Clone";
@@ -3272,6 +3281,7 @@ public final class ObservationCollector {
         p.setPvActuels((int) Math.round(fractionPv * p.getPvMax()));
         p.setStatut(adversaireBase.getStatut());
         p.setCoupsRageFistSubis(getCoupsRageFistAdversaire(espece));
+        p.setDepartLentActif(departLentActif(true, espece));
         // Délestage : Vitesse x2 s'il a perdu son objet DEPUIS SON ENTRÉE
         // (l'effet s'arrête quand il sort, même si l'objet reste perdu)
         p.setObjetPerdu(objetRetire && delestageActifAdversaire(espece));
@@ -4083,6 +4093,34 @@ public final class ObservationCollector {
         }
     }
 
+    // --- Départ Lent : "moi:espèce" / "adv:espèce" tant que l'effet dure ---
+    // Le jeu annonce le début (start.slowstart, à l'entrée) et la fin
+    // (end.slowstart, 5 tours plus tard). Sans ça, le Body Slam d'un
+    // Regigigas était prévu au double (logs random du 22/10).
+    private static final Set<String> DEPART_LENT = new HashSet<>();
+
+    private static void suivreDepartLent(String cle, Object[] args) {
+        if (cle.startsWith("cobblemon.battle.switch.self") || cle.startsWith("cobblemon.battle.withdraw.self")) {
+            DEPART_LENT.removeIf(k -> k.startsWith("moi:"));
+        } else if (cle.startsWith("cobblemon.battle.switch.other") || cle.startsWith("cobblemon.battle.withdraw.other")) {
+            DEPART_LENT.removeIf(k -> k.startsWith("adv:"));
+        } else if ((cle.equals("cobblemon.battle.start.slowstart") || cle.equals("cobblemon.battle.end.slowstart"))
+                && args.length > 0) {
+            Boolean adverse = determinerAttaquant(MoveUseTracker.extraireProprietaire(args[0]));
+            if (adverse == null) return;
+            // Espèce nommée par le message (le jeu n'a pas encore fait entrer le Pokémon)
+            String espece = especeOuActif(args[0]);
+            if (espece == null) return;
+            String k = (adverse ? "adv:" : "moi:") + espece;
+            if (cle.endsWith("start.slowstart")) DEPART_LENT.add(k);
+            else DEPART_LENT.remove(k);
+        }
+    }
+
+    public static boolean departLentActif(boolean adverse, String espece) {
+        return espece != null && DEPART_LENT.contains((adverse ? "adv:" : "moi:") + espece);
+    }
+
     private static void marquerObjetAdversairePerdu(String espece, String detail) {
         delestageAdversaire = espece;
         OBJETS_RETIRES.add(espece);
@@ -4114,6 +4152,7 @@ public final class ObservationCollector {
         suivreTorche(cle, contenu.getArgs());
         suivreDureeMeteo(cle, contenu.getArgs());
         suivreMorphingEtRates(cle, contenu.getArgs());
+        suivreDepartLent(cle, contenu.getArgs());
         suivreDelestage(cle, contenu.getArgs());
 
         if (cle.contains("quickclaw") || cle.contains("quickdraw") || cle.contains("custap")) {
@@ -4664,6 +4703,7 @@ public final class ObservationCollector {
      */
     public static void appliquerObjetReelJoueur(Pokemon p) {
         if (p == null) return;
+        p.setDepartLentActif(departLentActif(false, p.getEspece()));
         String connu = OBJET_REEL_JOUEUR_CONNU.get(p.getEspece());
         if (connu == null) return;
         p.setObjet(AUCUN_OBJET.equals(connu) ? null : connu);
@@ -5008,6 +5048,8 @@ public final class ObservationCollector {
         PREUVES_EXCLUSION.clear();
         PV_METAMORPH.clear();
         PvEquipe.vider();
+        BattleStateTracker.oublierFormes();
+        DEPART_LENT.clear();
         TALENTS_PROBABLES.clear();
         PLAFONDS_DEFENSIFS.clear();
         PLANCHERS_DEFENSIFS.clear();
@@ -5079,11 +5121,12 @@ public final class ObservationCollector {
     }
 
     public static Set<String> getTalentsReelsEspece(Pokemon adversaire) {
-        Species espece = com.cobblemon.mod.common.api.pokemon.PokemonSpecies.INSTANCE.getByName(adversaire.getEspece());
-        if (espece == null) return null;
+        // Forme vue en combat comprise (Tranchant du Samurott de Hisui)
+        List<String> noms = BattleStateTracker.talentsPossibles(adversaire.getEspece());
+        if (noms == null) return null;
         Set<String> r = new HashSet<>();
-        for (var p : espece.getAbilities()) {
-            String fr = ShowdownIdMapper.talent(p.getTemplate().getName());
+        for (String n : noms) {
+            String fr = ShowdownIdMapper.talent(n);
             if (fr != null) r.add(fr);
         }
         return r;
