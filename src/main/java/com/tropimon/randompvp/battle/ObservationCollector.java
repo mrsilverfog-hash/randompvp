@@ -1054,6 +1054,7 @@ public final class ObservationCollector {
         double correctionPv = 0;    // PV rendus (+) ou perdus (-) après le coup
         long instantMs;
         boolean pvStableAuCoup, pvAvantDouteux;
+        boolean entreeRecente;      // mon Pokémon venait d'entrer : sa barre de PV n'est pas encore à jour
         boolean morphing;           // un des deux transformé AU MOMENT du coup
         boolean torche, charge;     // Torche activée / Chargeur en place au moment du coup
     }
@@ -1329,6 +1330,7 @@ public final class ObservationCollector {
             especeMorphingAdversaire = null;
             capacitesMorphingAdversaire = new ArrayList<>();
         } else if (cle.startsWith("cobblemon.battle.switch.self") || cle.startsWith("cobblemon.battle.withdraw.self")) {
+            if (cle.startsWith("cobblemon.battle.switch.self")) entreeJoueurMs = System.currentTimeMillis();
             TRANSFORMES.removeIf(k -> k.startsWith("moi:"));
             cibleMorphingJoueur = null;
             capacitesMorphing = new ArrayList<>();
@@ -2411,6 +2413,7 @@ public final class ObservationCollector {
         cr.instantMs = System.currentTimeMillis();
         cr.pvStableAuCoup = SUIVI_PV_MOI.stableA(cr.especeDefenseur, cr.pvAvant);
         cr.pvAvantDouteux = cr.instantMs - SUIVI_PV_MOI.dernierEffetMs < 2500;
+        cr.entreeRecente = cr.instantMs - entreeJoueurMs < 4000;
         cr.etat = FieldTracker.construireField();
         cr.clone = FieldTracker.joueurAUnClone();
         cr.joueurBloqueAvant = joueurBloqueCeTour;
@@ -2569,9 +2572,17 @@ public final class ObservationCollector {
         return sb.length() == 0 ? null : sb.toString();
     }
 
+    /** Instant de mon dernier switch.self (barre de PV pas encore synchronisée). */
+    private static long entreeJoueurMs = 0;
+
     private static String analyserCoupRecu(CoupRecu cr) {
         StringBuilder log = new StringBuilder();
         if (cr.bloque) return "coup bloqué (Abri, raté, sans effet ou échoué)";
+        // Coup reçu juste après mon entrée : la barre montre encore l'ancien
+        // Pokémon ou 100 %, puis passe aux PV d'entrée, pris pour le coup
+        // (Avalanche sur Tarpaud entré à 83,5 % : "perte 10,2 %" au lieu de
+        // 34,8 %, et le Séisme suivant mesuré avec les dégâts d'Avalanche)
+        if (cr.entreeRecente) return "mesure invalide (je venais d'entrer, PV pas encore à jour)";
         double[] stables = mesureParPvStables(cr);
         if (stables == null && cr.pvAvantDouteux) {
             return "mesure invalide (effet sur mes PV juste avant le coup, pas encore appliqué)";
@@ -3754,6 +3765,7 @@ public final class ObservationCollector {
             return;
         }
         verifierChangementDeCombat();
+        BattleStateTracker.detecterFormat();
         etatVide = false;
         try {
             noterEquipeRandom();
@@ -5052,7 +5064,10 @@ public final class ObservationCollector {
             "BILAN DU COMBAT : %d/%d coups dans la fourchette prévue (%.0f %%)", dedans, BILAN.size(),
             100.0 * dedans / BILAN.size()));
         for (String e : ecarts) MessageDebugLogger.analyse("BILAN écart : " + e);
-        BilanCumule.noter(parEspece, BILAN.size(), dedans);
+        // Mauvais mod pour ce format : les hypothèses (EV) ne s'appliquent
+        // pas, le cumul serait faussé (combats classés lus par RandomPvp, 28/10)
+        if (Boolean.FALSE.equals(BattleStateTracker.estFormatRandom())) MessageDebugLogger.analyse("BILAN : combat classé (pas random), non compté dans le cumul RandomPvp");
+        else BilanCumule.noter(parEspece, BILAN.size(), dedans);
         BILAN.clear();
     }
 

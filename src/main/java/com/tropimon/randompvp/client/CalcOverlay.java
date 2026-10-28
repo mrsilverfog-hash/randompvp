@@ -87,6 +87,12 @@ public final class CalcOverlay implements HudRenderCallback {
 
         if (!com.tropimon.randompvp.ModToggle.estActif()) return;
         if (!BattleStateTracker.estEnCombat()) return;
+        // Mauvais mod pour ce format : un avertissement au lieu de calculs faux
+        if (Boolean.FALSE.equals(BattleStateTracker.estFormatRandom())) {
+            context.drawTextWithShadow(net.minecraft.client.MinecraftClient.getInstance().textRenderer,
+                net.minecraft.text.Text.literal("RandomPvp : combat classé détecté, active TropiCalc"), 4, 4, 0xFFFFAA55);
+            return;
+        }
         if (ObservationCollector.estCombatSauvage()) return;
 
         Pokemon adversaireBase = BattleStateTracker.getAdversaireActif();
