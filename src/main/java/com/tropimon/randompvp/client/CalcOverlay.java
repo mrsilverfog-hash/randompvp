@@ -832,7 +832,7 @@ public final class CalcOverlay implements HudRenderCallback {
      * Tête de Roc annule le recul, Garde Magik les deux.
      */
     private static int[] pvApresReculEtOrbe(Pokemon joueur, Pokemon adversaire,
-                                            com.tropimon.tropicalc.calc.Move capacite,
+                                            com.tropimon.randompvp.calc.Move capacite,
                                             DamageCalculator.Resultat r) {
         if (r == null || r.immunise || r.degatsMax <= 0) return null;
         String talent = joueur.getTalent();
