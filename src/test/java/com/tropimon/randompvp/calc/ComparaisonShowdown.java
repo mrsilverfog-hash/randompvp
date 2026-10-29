@@ -44,6 +44,8 @@ public final class ComparaisonShowdown {
             List<Cas> cas = new ArrayList<>();
             for (JsonElement e : tableau) {
                 JsonObject o = e.getAsJsonObject();
+                // Pas de combat double en random battle
+                if (o.has("double") && o.get("double").getAsBoolean()) continue;
                 cas.add(new Cas(o.get("nom").getAsString(), o));
             }
             return cas;
@@ -65,6 +67,7 @@ public final class ComparaisonShowdown {
         Field.Ecrans ecrans = new Field.Ecrans();
         ecrans.setProtection(o.get("protection").getAsBoolean());
         ecrans.setMurLumiere(o.get("murLumiere").getAsBoolean());
+        if (o.has("voileAurore")) ecrans.setBrumeAurore(o.get("voileAurore").getAsBoolean());
         boolean critique = o.get("critique").getAsBoolean();
 
         if (o.has("matriceAttendue") && !o.get("matriceAttendue").isJsonNull()) {
@@ -98,7 +101,7 @@ public final class ComparaisonShowdown {
             int[] obtenus = obtenue == null ? new int[16] : obtenue[i];
             if (!Arrays.equals(attendus, obtenus)) {
                 sb.append("\n  Coup ").append(i + 1).append(" Showdown  : ").append(Arrays.toString(attendus));
-                sb.append("\n  Coup ").append(i + 1).append(" TropiCalc : ").append(Arrays.toString(obtenus));
+                sb.append("\n  Coup ").append(i + 1).append(" RandomPvp : ").append(Arrays.toString(obtenus));
             }
         }
         if (sb.length() == 0) return null;
@@ -118,7 +121,7 @@ public final class ComparaisonShowdown {
         boolean memeChance = chanceAttendue < 0 ? k.possible() : (!k.possible() && Math.abs(k.chance() - chanceAttendue) < 1e-9);
         if (memeN && memeChance) return null;
         return "\n  Chances de K.O. : Showdown " + ko.get("texte").getAsString() + " (n=" + nAttendu + ", "
-            + chanceAttendue + "), TropiCalc " + k.texte() + " (n=" + k.n() + ", " + k.chance() + ")";
+            + chanceAttendue + "), RandomPvp " + k.texte() + " (n=" + k.n() + ", " + k.chance() + ")";
     }
 
     // --- Construction des objets du calcul ---
@@ -163,6 +166,11 @@ public final class ComparaisonShowdown {
         Pokemon.Statut statut = STATUTS.get(p.get("statut").getAsString());
         if (statut != null) pokemon.setStatut(statut);
         pokemon.setPvActuels(p.get("pvActuels").getAsInt());
+        if (p.has("objetPerdu") && p.get("objetPerdu").getAsBoolean()) {
+            pokemon.setObjetPerdu(true);
+            pokemon.setDepartLentActif(true);   // abilityOn de Showdown : talent actif
+        }
+        if (p.has("alliesKo")) pokemon.setAlliesKo(p.get("alliesKo").getAsInt());
         return pokemon;
     }
 
