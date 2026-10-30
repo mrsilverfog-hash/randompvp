@@ -649,6 +649,14 @@ public final class CalcOverlay implements HudRenderCallback {
             y += hauteurLigne;
         }
 
+        // Talent adverse : seulement quand on le connaît
+        String talentConnu = ObservationCollector.getTalentConnuTexte(especeAdv);
+        if (talentConnu != null) {
+            y += 4;
+            dessinerTexte(talentConnu, x, y, talentConnu.endsWith("✓") ? COULEUR_REVELE : COULEUR_TEXTE);
+            y += hauteurLigne;
+        }
+
         // --- Section 3 : objet confirmé ---
         // Plus aucun "Set estimé" : en random battle les EV (85 partout) et la
         // nature (neutre) sont connus, il n'y a rien à estimer. Afficher un
