@@ -152,7 +152,7 @@ public final class TypeTracker {
     }
 
     /** Retire le type Vol pour ce tour (Vol pur : devient Normal). */
-    private static void sansVol(com.tropimon.tropicalc.calc.Pokemon p) {
+    private static void sansVol(com.tropimon.randompvp.calc.Pokemon p) {
         PokemonType t1 = p.getType1(), t2 = p.getType2();
         if (t1 != PokemonType.VOL && t2 != PokemonType.VOL) return;
         if (t1 == PokemonType.VOL) {
