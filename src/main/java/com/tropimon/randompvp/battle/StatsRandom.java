@@ -103,6 +103,24 @@ public final class StatsRandom {
         return r;
     }
 
+    /**
+     * « Objets vus : Restes 4×, Orbe Vie 2× (8 rencontrés) » : les 3 objets
+     * les plus vus sur cette espèce dans tes combats random, null si aucun.
+     */
+    public static synchronized String texteObjets(String espece) {
+        Espece e = donnees().get(cle(espece));
+        if (e == null || e.objets.isEmpty()) return null;
+        List<Map.Entry<String, Integer>> l = new ArrayList<>(e.objets.entrySet());
+        l.sort((a, b) -> b.getValue() - a.getValue());
+        StringBuilder sb = new StringBuilder("Objets vus : ");
+        for (int i = 0; i < Math.min(3, l.size()); i++) {
+            if (i > 0) sb.append(", ");
+            sb.append(l.get(i).getKey()).append(' ').append(l.get(i).getValue()).append('×');
+        }
+        sb.append(" (").append(e.vus).append(e.vus > 1 ? " rencontrés)" : " rencontré)");
+        return sb.toString();
+    }
+
     /** Objets déjà vus pour cette espèce (nom français -> nombre de fois). */
     static synchronized Map<String, Integer> objets(String espece) {
         Espece e = donnees().get(cle(espece));

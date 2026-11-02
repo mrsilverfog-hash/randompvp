@@ -651,10 +651,21 @@ public final class CalcOverlay implements HudRenderCallback {
 
         // Talent adverse : seulement quand on le connaît
         String talentConnu = ObservationCollector.getTalentConnuTexte(especeAdv);
+        boolean espaceFait = false;
         if (talentConnu != null) {
             y += 4;
+            espaceFait = true;
             dessinerTexte(talentConnu, x, y, talentConnu.endsWith("✓") ? COULEUR_REVELE : COULEUR_TEXTE);
             y += hauteurLigne;
+        }
+        // Objets déjà rencontrés sur cette espèce en random, tant que le sien est inconnu
+        if (!ObservationCollector.estObjetConfirme(especeAdv)) {
+            String objetsVus = com.tropimon.randompvp.battle.StatsRandom.texteObjets(especeAdv);
+            if (objetsVus != null) {
+                if (!espaceFait) y += 4;
+                dessinerTexte(objetsVus, x, y, COULEUR_GRIS);
+                y += hauteurLigne;
+            }
         }
 
         // --- Section 3 : objet confirmé ---
@@ -846,20 +857,14 @@ public final class CalcOverlay implements HudRenderCallback {
         String talent = joueur.getTalent();
         if ("Garde Magik".equals(talent)) return null;
         String id = capacite.getNom() == null ? "" : capacite.getNom();
-        int num = 0, den = 1;
-        switch (id) {
-            case "bravebird", "flareblitz", "woodhammer", "volttackle", "wavecrash", "doubleedge" -> { num = 1; den = 3; }
-            case "takedown", "submission", "wildcharge", "headcharge" -> { num = 1; den = 4; }
-            case "headsmash", "lightofruin" -> { num = 1; den = 2; }
-            default -> { }
-        }
+        // Fractions de recul des données Showdown (Rapace 33/100, Fracass'Tête 1/2...)
+        int[] fraction = com.tropimon.randompvp.calc.DrapeauxCapacites.RECUL.get(id);
+        int num = fraction == null ? 0 : fraction[0];
+        int den = fraction == null ? 1 : fraction[1];
         if ("Tête de Roc".equals(talent)) num = 0;
         // Coûts fixes en PV (pas du recul : Tête de Roc n'y change rien)
         int pvMax = joueur.getPvMax();
-        int fixe = switch (id) {
-            case "mindblown", "steelbeam", "chloroblast" -> (pvMax + 1) / 2;
-            default -> 0;
-        };
+        int fixe = com.tropimon.randompvp.calc.DrapeauxCapacites.RECUL_PV_MAX.contains(id) ? (pvMax + 1) / 2 : 0;
         int orbe = "Orbe Vie".equals(joueur.getObjet()) ? Math.max(1, pvMax / 10) : 0;
         if (num == 0 && fixe == 0 && orbe == 0) return null;
         int pvAdv = adversaire.getPvActuels() > 0 ? adversaire.getPvActuels() : adversaire.getPvMax();
